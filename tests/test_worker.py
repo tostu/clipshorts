@@ -3,7 +3,7 @@ import asyncio
 from clipshorts.worker import Worker
 
 
-async def test_process_one_runs_job_and_parks_at_unimplemented_stage(cfg, db, bus, fake_tools):
+async def test_process_one_runs_job_to_done(cfg, db, bus, fake_tools):
     c = db.create_clip("https://clips.twitch.tv/abc12345", "abc12345")
     job = db.enqueue_job("pipeline", c.id)
     w = Worker(cfg, db, bus, fake_tools.as_tools())
@@ -15,8 +15,9 @@ async def test_process_one_runs_job_and_parks_at_unimplemented_stage(cfg, db, bu
         await w.shutdown()
     assert db.get_job(job.id).status == "done"
     row = db.get_clip(c.id)
-    assert row.status == "waiting" and row.stage == "render"
+    assert row.status == "done" and row.stage == "render"
     assert row.title == "Big Play"
+    assert (cfg.clip_dir(c.id) / "output.mp4").exists()
 
 
 async def test_failed_pipeline_marks_job_failed(cfg, db, bus):
@@ -54,10 +55,10 @@ async def test_start_recovers_and_loop_drains(cfg, db, bus, fake_tools):
     await w.start()
     try:
         for _ in range(100):
-            if db.get_clip(c.id).status == "waiting":
+            if db.get_clip(c.id).status == "done":
                 break
             await asyncio.sleep(0.05)
     finally:
         await w.shutdown()
-    assert db.get_clip(c.id).status == "waiting"
+    assert db.get_clip(c.id).status == "done"
     assert len(fake_tools.downloads) == 1

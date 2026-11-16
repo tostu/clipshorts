@@ -5,11 +5,12 @@ import json
 from collections.abc import AsyncIterator, Awaitable, Callable
 
 from fastapi import APIRouter, HTTPException, Request, Response
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 from .db import DB
 from .events import EventBus
-from .models import Clip, ClipCreate
+from .models import Clip, ClipCreate, RerenderBody
+from .pipeline import OUTPUT_FILE
 from .twitch import ClipUrlError, parse_clip_url
 from .worker import Worker
 
@@ -18,6 +19,16 @@ router = APIRouter(prefix="/api")
 
 def _db(request: Request) -> DB:
     return request.app.state.db
+
+
+def _output_path(request: Request, clip_id: int):
+    return request.app.state.cfg.clip_dir(clip_id) / OUTPUT_FILE
+
+
+def _with_output(request: Request, clip: Clip) -> Clip:
+    if _output_path(request, clip.id).is_file():
+        clip.output_url = f"/api/clips/{clip.id}/output"
+    return clip
 
 
 def sse_frame(event: str, data: dict) -> str:
@@ -56,7 +67,7 @@ async def events(request: Request):
 
 @router.get("/clips")
 def list_clips(request: Request, status: str | None = None) -> list[Clip]:
-    return _db(request).list_clips(status=status)
+    return [_with_output(request, c) for c in _db(request).list_clips(status=status)]
 
 
 @router.get("/clips/{clip_id}")
@@ -64,7 +75,42 @@ def get_clip(request: Request, clip_id: int) -> Clip:
     clip = _db(request).get_clip(clip_id)
     if not clip:
         raise HTTPException(404, "clip not found")
-    return clip
+    return _with_output(request, clip)
+
+
+@router.post("/clips/{clip_id}/rerender")
+def rerender(request: Request, clip_id: int, body: RerenderBody | None = None) -> Clip:
+    """Re-run the pipeline for a clip, optionally with a new layout. Cached stages are
+    skipped, so a layout change costs only layout + render (no re-transcription)."""
+    db = _db(request)
+    clip = db.get_clip(clip_id)
+    if not clip:
+        raise HTTPException(404, "clip not found")
+    if clip.status in ("queued", "running"):
+        raise HTTPException(409, f"clip is already {clip.status}")
+    fields: dict = {"status": "queued", "error": None}
+    if body is not None and body.layout is not None:
+        fields["layout_override"] = None if body.layout == "auto" else body.layout
+    clip = db.update_clip(clip_id, **fields)
+    db.enqueue_job("pipeline", clip_id)
+    request.app.state.bus.publish("clip", clip.model_dump())
+    _poke(request)
+    return _with_output(request, clip)
+
+
+@router.get("/clips/{clip_id}/output")
+def get_output(request: Request, clip_id: int, download: bool = False):
+    """The rendered MP4. Range requests are answered (preview seeking, resumable download)."""
+    clip = _db(request).get_clip(clip_id)
+    if not clip:
+        raise HTTPException(404, "clip not found")
+    path = _output_path(request, clip_id)
+    if not path.is_file():
+        raise HTTPException(404, "no output yet")
+    return FileResponse(
+        path, media_type="video/mp4", filename=f"{clip.slug}.mp4",
+        content_disposition_type="attachment" if download else "inline",
+    )
 
 
 @router.post("/clips", status_code=201)

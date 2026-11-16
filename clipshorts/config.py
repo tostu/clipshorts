@@ -31,6 +31,14 @@ class Config(BaseSettings):
     caption_max_words: int = 3
     fps_cap: int = 30
 
+    # Render. video_encoder: libx264 (default) or h264_qsv (needs /dev/dri mounted; untested)
+    video_encoder: str = "libx264"
+    x264_preset: str = "veryfast"
+    x264_crf: int = 20
+    render_split_ratio: float = 0.38  # stacked layout: facecam share of the output height
+    render_timeout_factor: float = 8.0  # wall-clock limit = factor x clip duration ...
+    render_timeout_min_s: float = 120.0  # ... but never below this
+
     ffmpeg_bin: str = "ffmpeg"
     ffprobe_bin: str = "ffprobe"
     ytdlp_format: str = "best"

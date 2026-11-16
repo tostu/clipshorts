@@ -1,0 +1,1 @@
+[0:v]fps=30,crop=606:1080:656:0,scale=1080:1920,setsar=1,ass=filename=/data/clips/1/captions.ass:fontsdir=/srv/clipshorts/fonts,format=nv12[vout];[0:a]loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000[aout]

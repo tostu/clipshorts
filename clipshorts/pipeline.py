@@ -10,6 +10,7 @@ override re-runs layout + render; transcribe and captions stay cached.
 import hashlib
 import json
 import logging
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -32,8 +33,9 @@ from .layout import (
     sample_times,
     summarize_faces,
 )
-from .media import MediaError, Tools
+from .media import Cancelled, MediaError, Tools
 from .models import Clip
+from .render import RenderOptions, build_command, plan_render, render_timeout
 from .transcribe import WHISPER_SETTINGS, build_prompt, empty_transcript
 
 log = logging.getLogger(__name__)
@@ -54,6 +56,7 @@ class StageContext:
     db: DB
     tools: Tools
     progress: Callable[[float], None]  # fraction 0..1 within the current stage
+    cancel: threading.Event | None = None  # set on worker shutdown; long stages must honor it
 
 
 @dataclass
@@ -317,6 +320,53 @@ def _captions(ctx: StageContext) -> None:
     tmp.replace(ctx.dir / CAPTIONS_FILE)
 
 
+# -- render (M4) ---------------------------------------------------------------------------
+OUTPUT_FILE = "output.mp4"
+
+
+def _render_options(cfg: Config) -> RenderOptions:
+    return RenderOptions(
+        fps_cap=cfg.fps_cap, split_ratio=cfg.render_split_ratio, encoder=cfg.video_encoder,
+        preset=cfg.x264_preset, crf=cfg.x264_crf,
+    )
+
+
+def _render_params(clip: Clip, cfg: Config) -> dict[str, Any]:
+    # layout override and captions reach the hash through Stage.after
+    return _render_options(cfg).as_dict()
+
+
+def _render(ctx: StageContext) -> None:
+    cfg, d = ctx.cfg, ctx.dir
+    layout = _read_json(d / LAYOUT_FILE)
+    if not layout:
+        raise StageError("layout.json missing or unreadable")
+    probe = _read_json(d / "meta.json").get("ffprobe", {})
+    duration = probe.get("duration") or ctx.clip.duration_s or 0.0
+    ass = d / CAPTIONS_FILE
+    try:
+        has_captions = "Dialogue:" in ass.read_text(encoding="utf-8")
+    except OSError:
+        has_captions = False
+    opts = _render_options(cfg)
+    plan = plan_render(layout, probe, opts, ass.resolve() if has_captions else None,
+                       cfg.fonts_dir.resolve())
+    tmp = d / (OUTPUT_FILE + ".tmp")
+    cmd = build_command(cfg.ffmpeg_bin, (d / "source.mp4").resolve(), tmp.resolve(), plan, opts)
+    timeout = render_timeout(duration, cfg.render_timeout_factor, cfg.render_timeout_min_s)
+    try:
+        ctx.tools.render(
+            cmd, tmp, duration=float(duration), timeout=timeout, on_progress=ctx.progress,
+            cancel=ctx.cancel, require_filters=plan.filters,
+            require_encoders=[opts.encoder, "aac"] if plan.has_audio else [opts.encoder],
+        )
+        tmp.replace(d / OUTPUT_FILE)
+    finally:
+        tmp.unlink(missing_ok=True)
+    ctx.db.add_render(ctx.clip.id, plan.layout, {**plan.params, "notes": plan.notes},
+                      str(d / OUTPUT_FILE))
+
+
 # transcribe depends on the source only (probe); captions on the transcript; render on
 # captions AND layout. A layout override therefore re-runs layout + render, nothing else.
 STAGES: list[Stage] = [
@@ -326,14 +376,13 @@ STAGES: list[Stage] = [
     Stage("layout", [LAYOUT_FILE], _layout_params, _layout),
     Stage("transcribe", [TRANSCRIPT_FILE], _transcribe_params, _transcribe, after=("probe",)),
     Stage("captions", [CAPTIONS_FILE], _captions_params, _captions, after=("transcribe",)),
-    Stage("render", ["output.mp4"], lambda c, cfg: {"fps_cap": cfg.fps_cap}, None,
-          after=("captions", "layout")),
+    Stage("render", [OUTPUT_FILE], _render_params, _render, after=("captions", "layout")),
 ]
 
 
 @dataclass
 class PipelineResult:
-    status: str  # done | failed | waiting
+    status: str  # done | failed | waiting (stage not implemented) | cancelled
     stage: str | None = None
     error: str | None = None
     ran: list[str] = field(default_factory=list)
@@ -347,8 +396,12 @@ def run_pipeline(
     bus: EventBus,
     tools: Tools,
     stages: list[Stage] | None = None,
+    cancel: threading.Event | None = None,
 ) -> PipelineResult:
-    """Run all stages for a clip, skipping cached ones. Blocking; run in a worker thread."""
+    """Run all stages for a clip, skipping cached ones. Blocking; run in a worker thread.
+
+    `cancel` (worker shutdown) interrupts long stages; the result is then `cancelled` and the
+    clip goes back to `queued` so the next start resumes it."""
     stages = STAGES if stages is None else stages
     clip = db.get_clip(clip_id)
     if clip is None:
@@ -384,21 +437,29 @@ def run_pipeline(
             return result
 
         emit(stage=stage.name, progress=idx / total)
-        last = [0.0]
+        last = [0.0, 0.0]  # last published fraction, last persisted fraction
 
         def on_progress(frac: float, idx=idx, name=stage.name, last=last) -> None:
             frac = max(0.0, min(1.0, frac))
             if frac - last[0] < 0.02 and frac < 1.0:
                 return
             last[0] = frac
-            # progress is a transient: published, persisted only on stage boundaries
+            overall = (idx + frac) / total
+            # published on every step, persisted every 5% so a page reload sees progress
+            if frac - last[1] >= 0.05:
+                last[1] = frac
+                db.update_clip(clip_id, progress=overall)
             bus.publish("clip", {"id": clip_id, "stage": name,
-                                 "progress": (idx + frac) / total, "status": "running"})
+                                 "progress": overall, "status": "running"})
 
-        ctx = StageContext(clip, clip_dir, cfg, db, tools, on_progress)
+        ctx = StageContext(clip, clip_dir, cfg, db, tools, on_progress, cancel)
         t0 = time.monotonic()
         try:
             stage.run(ctx)
+        except Cancelled:
+            result.status, result.stage = "cancelled", stage.name
+            emit(status="queued", stage=stage.name)
+            return result
         except (StageError, MediaError) as e:
             return _fail(result, stage.name, str(e), emit)
         except Exception as e:  # noqa: BLE001 - surface anything to the user
@@ -412,7 +473,8 @@ def run_pipeline(
         result.ran.append(stage.name)
         emit(stage=stage.name, progress=(idx + 1) / total)
 
-    emit(status="done", stage=stages[-1].name if stages else None, progress=1.0)
+    result.stage = stages[-1].name if stages else None
+    emit(status="done", stage=result.stage, progress=1.0)
     return result
 
 

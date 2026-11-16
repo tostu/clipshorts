@@ -1,0 +1,1 @@
+[0:v]fps=30,split=2[cam][con];[cam]crop=480:384:0:586,scale=1080:864,setsar=1[top];[con]crop=1104:1080:648:0,scale=1080:1056,setsar=1[bot];[top][bot]vstack=inputs=2,ass=filename=/data/clips/1/captions.ass:fontsdir=/srv/clipshorts/fonts,format=yuv420p[vout];[0:a]loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000[aout]

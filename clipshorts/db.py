@@ -163,6 +163,15 @@ class DB:
         )
         return cur.lastrowid
 
+    def latest_render(self, clip_id: int) -> dict | None:
+        r = self._one("SELECT * FROM renders WHERE clip_id=? ORDER BY id DESC LIMIT 1",
+                      (clip_id,))
+        if not r:
+            return None
+        d = dict(r)
+        d["params"] = json.loads(d.pop("params_json") or "{}")
+        return d
+
     # -- jobs -----------------------------------------------------------
     @staticmethod
     def _job(r: sqlite3.Row) -> Job:

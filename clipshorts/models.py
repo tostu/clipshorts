@@ -27,12 +27,17 @@ class Clip(BaseModel):
     layout_override: str | None = None
     created_at: str
     updated_at: str
+    output_url: str | None = None  # filled by the API when output.mp4 exists
 
 
 class ClipCreate(BaseModel):
     url: str
     language: Language = "auto"
     layout: LayoutChoice = "auto"
+
+
+class RerenderBody(BaseModel):
+    layout: LayoutChoice | None = None  # None = keep the current layout choice
 
 
 class Job(BaseModel):

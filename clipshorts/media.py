@@ -15,6 +15,10 @@ class MediaError(RuntimeError):
     """A download/probe step failed in a way worth showing to the user."""
 
 
+class Cancelled(Exception):
+    """The running stage was interrupted (worker shutdown); not a failure."""
+
+
 def ytdlp_download(
     url: str,
     dest: Path,
@@ -170,6 +174,13 @@ def transcribe_audio(audio: Path, **kwargs: Any) -> dict[str, Any]:
     return default_transcribe(audio, **kwargs)
 
 
+def render_video(cmd: list[str], out_path: Path, **kwargs: Any) -> None:
+    """Default renderer (lazy import: render.py imports this module)."""
+    from .render import run_ffmpeg
+
+    run_ffmpeg(cmd, out_path, **kwargs)
+
+
 @dataclass
 class Tools:
     """Injectable external calls. Tests replace the callables."""
@@ -180,6 +191,8 @@ class Tools:
     analyze_frames: Callable[..., Any] = analyze_frames_yunet
     # (audio_path, *, cfg, language, allowed, prompt, on_progress) -> transcript dict
     transcribe: Callable[..., dict[str, Any]] = transcribe_audio
+    # (cmd, out_path, *, duration, timeout, on_progress, cancel, require_filters) -> None
+    render: Callable[..., None] = render_video
 
 
 def default_tools(cfg: Config) -> Tools:

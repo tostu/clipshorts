@@ -19,7 +19,7 @@ def _clip(db, **kw):
 def test_transcribe_and_captions_write_artifacts(cfg, db, bus, fake_tools):
     c = _clip(db)
     res = run_pipeline(c.id, cfg, db, bus, fake_tools.as_tools())
-    assert res.status == "waiting" and res.stage == "render"
+    assert res.status == "done" and res.stage == "render"
     d = cfg.clip_dir(c.id)
     t = json.loads((d / TRANSCRIPT_FILE).read_text())
     assert t["language"] == "de" and len(t["words"]) == 4
@@ -65,9 +65,9 @@ def test_layout_override_reruns_only_layout_and_render(cfg, db, bus, fake_tools)
 
     db.update_clip(c.id, layout_override="stacked")
     res = run_pipeline(c.id, cfg, db, bus, t)
-    assert res.ran == ["layout"]  # render is unimplemented and parks the clip
+    assert res.ran == ["layout", "render"]
     assert res.skipped == ["download", "probe", "transcribe", "captions"]
-    assert res.status == "waiting" and res.stage == "render"
+    assert res.status == "done" and res.stage == "render"
     assert len(fake_tools.transcriptions) == 1
     assert (cfg.clip_dir(c.id) / CAPTIONS_FILE).stat().st_mtime_ns == ass_before
     state = load_state(cfg.clip_dir(c.id))
@@ -79,7 +79,7 @@ def test_layout_override_reruns_only_layout_and_render(cfg, db, bus, fake_tools)
     # and back to auto: still no transcription
     db.update_clip(c.id, layout_override="auto")
     res = run_pipeline(c.id, cfg, db, bus, t)
-    assert res.ran == ["layout"] and len(fake_tools.transcriptions) == 1
+    assert res.ran == ["layout", "render"] and len(fake_tools.transcriptions) == 1
 
 
 def test_render_hash_depends_on_layout_and_captions():
@@ -96,7 +96,7 @@ def test_language_change_reruns_transcribe_and_captions_not_layout(cfg, db, bus,
     run_pipeline(c.id, cfg, db, bus, t)
     db.update_clip(c.id, language="en")
     res = run_pipeline(c.id, cfg, db, bus, t)
-    assert res.ran == ["transcribe", "captions"] and "layout" in res.skipped
+    assert res.ran == ["transcribe", "captions", "render"] and "layout" in res.skipped
 
 
 def test_captions_rerun_when_style_changes(cfg, db, bus, fake_tools):
@@ -108,7 +108,7 @@ def test_captions_rerun_when_style_changes(cfg, db, bus, fake_tools):
     cfg2 = Config(data_dir=cfg.data_dir, worker_enabled=False, nice_level=0, _env_file=None,
                   caption_font_size=70)
     res = run_pipeline(c.id, cfg2, db, bus, t)
-    assert res.ran == ["captions"] and "transcribe" in res.skipped
+    assert res.ran == ["captions", "render"] and "transcribe" in res.skipped
     assert "Style: Default,Poppins,70," in (cfg2.clip_dir(c.id) / CAPTIONS_FILE).read_text()
 
 
@@ -142,4 +142,4 @@ def test_transcribe_failure_surfaces_and_keeps_earlier_stages(cfg, db, bus, fake
     assert res.status == "failed" and res.error == "transcribe: model download failed"
     fake_tools.fail_transcribe = None
     res = run_pipeline(c.id, cfg, db, bus, fake_tools.as_tools())
-    assert res.ran == ["transcribe", "captions"] and len(fake_tools.downloads) == 1
+    assert res.ran == ["transcribe", "captions", "render"] and len(fake_tools.downloads) == 1

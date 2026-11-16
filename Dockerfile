@@ -5,6 +5,12 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends ffmpeg tini \
  && rm -rf /var/lib/apt/lists/*
 
+# Fail the build if this ffmpeg cannot do the render: libass (captions) and libx264 + aac.
+# Debian's ffmpeg package ships them; a different base image must keep them.
+RUN ffmpeg -hide_banner -filters 2>&1 | grep -Eq '^ \S+ +ass +V->V' \
+ && ffmpeg -hide_banner -encoders 2>&1 | grep -q ' libx264 ' \
+ && ffmpeg -hide_banner -encoders 2>&1 | grep -Eq ' aac '
+
 WORKDIR /srv
 COPY pyproject.toml ./
 COPY clipshorts ./clipshorts

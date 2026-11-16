@@ -3,6 +3,7 @@
 import asyncio
 import contextlib
 import logging
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 
@@ -27,6 +28,7 @@ class Worker:
         self._wake = asyncio.Event()
         self._task: asyncio.Task | None = None
         self._stopping = False
+        self._cancel = threading.Event()  # tells a running stage (ffmpeg) to stop on shutdown
 
     def poke(self) -> None:
         self._wake.set()
@@ -41,6 +43,7 @@ class Worker:
 
     async def shutdown(self) -> None:
         self._stopping = True
+        self._cancel.set()
         self._wake.set()
         if self._task:
             self._task.cancel()
@@ -71,7 +74,9 @@ class Worker:
         loop = asyncio.get_running_loop()
         try:
             res: PipelineResult = await loop.run_in_executor(
-                self._pool, run_pipeline, job.ref_id, self.cfg, self.db, self.bus, self.tools
+                self._pool,
+                partial(run_pipeline, job.ref_id, self.cfg, self.db, self.bus, self.tools,
+                        cancel=self._cancel),
             )
         except asyncio.CancelledError:
             raise  # leave job 'running': recovery re-queues it on next start
@@ -82,5 +87,7 @@ class Worker:
             if clip:
                 self.bus.publish("clip", clip.model_dump())
             return True
+        if res.status == "cancelled":
+            return True  # shutdown mid-render: job stays 'running', recovery re-queues it
         self.db.finish_job(job.id, res.status != "failed", res.error)
         return True

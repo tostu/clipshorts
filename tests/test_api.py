@@ -73,6 +73,108 @@ def test_status_filter(client):
     assert client.get("/api/clips?status=done").json() == []
 
 
+def _done_clip(client, cfg, payload: bytes = b"0123456789" * 100):
+    clip = client.post("/api/clips", json={"url": URL}).json()
+    db = client.app.state.db
+    db.claim_next_job()
+    db.update_clip(clip["id"], status="done", stage="render", progress=1.0)
+    d = cfg.clip_dir(clip["id"])
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "output.mp4").write_bytes(payload)
+    return clip["id"]
+
+
+def test_output_404s(client, cfg):
+    assert client.get("/api/clips/99/output").status_code == 404
+    cid = client.post("/api/clips", json={"url": URL}).json()["id"]
+    assert client.get(f"/api/clips/{cid}/output").status_code == 404  # not rendered yet
+    assert client.get(f"/api/clips/{cid}").json()["output_url"] is None
+
+
+def test_output_full_and_clip_exposes_url(client, cfg):
+    cid = _done_clip(client, cfg)
+    r = client.get(f"/api/clips/{cid}/output")
+    assert r.status_code == 200 and r.headers["content-type"] == "video/mp4"
+    assert r.headers["accept-ranges"] == "bytes" and len(r.content) == 1000
+    assert r.headers["content-disposition"].startswith("inline")
+    assert client.get(f"/api/clips/{cid}").json()["output_url"] == f"/api/clips/{cid}/output"
+    assert client.get("/api/clips").json()[0]["output_url"] == f"/api/clips/{cid}/output"
+    dl = client.get(f"/api/clips/{cid}/output?download=1")
+    assert dl.headers["content-disposition"].startswith("attachment")
+    assert "FamousSecretiveDolphinPoooound-aBc123.mp4" in dl.headers["content-disposition"]
+
+
+def test_output_range_requests(client, cfg):
+    payload = bytes(range(256)) * 4
+    cid = _done_clip(client, cfg, payload)
+    url = f"/api/clips/{cid}/output"
+    r = client.get(url, headers={"Range": "bytes=10-19"})
+    assert r.status_code == 206 and r.content == payload[10:20]
+    assert r.headers["content-range"] == f"bytes 10-19/{len(payload)}"
+    r = client.get(url, headers={"Range": "bytes=1000-"})  # open-ended (browser seeking)
+    assert r.status_code == 206 and r.content == payload[1000:]
+    r = client.get(url, headers={"Range": "bytes=-24"})  # suffix
+    assert r.status_code == 206 and r.content == payload[-24:]
+    r = client.get(url, headers={"Range": "bytes=5000-6000"})
+    assert r.status_code == 416
+    assert r.headers["content-range"] == f"bytes */{len(payload)}"
+
+
+def test_rerender_requeues_with_new_layout(client, cfg):
+    cid = _done_clip(client, cfg)
+    db = client.app.state.db
+    r = client.post(f"/api/clips/{cid}/rerender", json={"layout": "stacked"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "queued" and body["layout_override"] == "stacked"
+    assert len(db.list_jobs("queued")) == 1 and db.list_jobs("queued")[0].ref_id == cid
+    # busy clip: no second job
+    assert client.post(f"/api/clips/{cid}/rerender", json={}).status_code == 409
+    assert len(db.list_jobs("queued")) == 1
+
+
+def test_rerender_auto_clears_override_and_empty_body_keeps_it(client, cfg):
+    cid = _done_clip(client, cfg)
+    db = client.app.state.db
+    db.update_clip(cid, layout_override="face")
+    r = client.post(f"/api/clips/{cid}/rerender")  # no body at all
+    assert r.status_code == 200 and r.json()["layout_override"] == "face"
+    db.update_clip(cid, status="done")
+    r = client.post(f"/api/clips/{cid}/rerender", json={"layout": "auto"})
+    assert r.json()["layout_override"] is None
+
+
+def test_rerender_validation(client, cfg):
+    assert client.post("/api/clips/99/rerender", json={}).status_code == 404
+    cid = _done_clip(client, cfg)
+    assert client.post(f"/api/clips/{cid}/rerender", json={"layout": "bogus"}).status_code == 422
+
+
+def test_rerender_end_to_end_with_worker(tmp_path, fake_tools):
+    """A done clip re-rendered with a new layout re-runs layout + render only."""
+    import time
+
+    cfg2 = Config(data_dir=tmp_path / "d", worker_enabled=True, nice_level=0, _env_file=None)
+    with TestClient(create_app(cfg2, fake_tools.as_tools())) as c:
+        cid = c.post("/api/clips", json={"url": URL}).json()["id"]
+
+        def wait_done():
+            for _ in range(200):
+                body = c.get(f"/api/clips/{cid}").json()
+                if body["status"] in ("done", "failed"):
+                    return body
+                time.sleep(0.05)
+            raise AssertionError("worker did not finish")
+
+        first = wait_done()
+        assert first["status"] == "done" and first["output_url"]
+        assert c.get(first["output_url"]).content == b"fake-output"
+        c.post(f"/api/clips/{cid}/rerender", json={"layout": "content"})
+        second = wait_done()
+        assert second["status"] == "done" and second["layout_type"] == "content"
+        assert len(fake_tools.renders) == 2 and len(fake_tools.transcriptions) == 1
+
+
 def test_auth_token(tmp_path):
     cfg = Config(data_dir=tmp_path / "d", auth_token="tok", worker_enabled=False,
                  nice_level=0, _env_file=None)

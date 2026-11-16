@@ -1,0 +1,1 @@
+[0:v]split=2[bg][fg];[bg]scale=270:480:force_original_aspect_ratio=increase,crop=270:480,gblur=sigma=8,scale=1080:1920,setsar=1[bgb];[fg]scale=1080:1920:force_original_aspect_ratio=decrease:force_divisible_by=2,setsar=1[fgs];[bgb][fgs]overlay=x=(W-w)/2:y=(H-h)/2,format=yuv420p[vout]

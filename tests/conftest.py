@@ -40,6 +40,8 @@ class FakeTools:
         self.analysis_faces: list[Face] | None = None
         self.transcriptions: list[dict] = []
         self.fail_transcribe: str | None = None
+        self.renders: list[dict] = []
+        self.fail_render: str | None = None
         self.transcript: dict = {
             "version": 1, "language": "de", "language_source": "auto",
             "segments": [],
@@ -104,10 +106,21 @@ class FakeTools:
             raise MediaError(self.fail_transcribe)
         return {**self.transcript, "language": language or self.transcript["language"]}
 
+    def render(self, cmd, out_path, *, duration, timeout, on_progress=None, cancel=None,
+               require_filters=(), require_encoders=()):
+        self.renders.append({"cmd": list(cmd), "out": str(out_path), "duration": duration,
+                             "timeout": timeout, "filters": list(require_filters)})
+        if self.fail_render:
+            raise MediaError(self.fail_render)
+        if on_progress:
+            on_progress(0.5)
+            on_progress(1.0)
+        out_path.write_bytes(b"fake-output")
+
     def as_tools(self) -> Tools:
         return Tools(download=self.download, probe=self.probe,
                      extract_frames=self.extract_frames, analyze_frames=self.analyze_frames,
-                     transcribe=self.transcribe)
+                     transcribe=self.transcribe, render=self.render)
 
 
 @pytest.fixture
