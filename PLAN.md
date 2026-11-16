@@ -113,7 +113,7 @@ Output 1080x1920, H.264 `yuv420p`, AAC 160k, `+faststart`.
 
 - **fullcam:** crop 9:16 around the median face x, scale to 1080x1920.
 - **stacked:** top ~38% = facecam rect (cover-scaled), bottom = content rect (cover-scaled), `vstack`. Split ratio is a parameter.
-- **face-focus:** crop around the face, scale to full frame.
+- **face-focus:** the whole facecam rect fitted to the output width, centered over a darkened, blurred cover copy of the same region (no bars). *Changed after real use:* the original 9:16 crop of the facecam cut off most of the picture and upscaled a corner facecam about 5x. If only a face box exists, a ~4:3 rect of about 3 face widths is used. `low_res_source` is flagged in the render params above a 2.5x upscale.
 - **content:** blurred-background fit of the whole frame (the clip editor's "fullscreen" idea).
 - Captions: `ass` filter in the same filter graph as the layout. No second encode.
 - Audio: `loudnorm` single pass.
@@ -133,15 +133,29 @@ Output 1080x1920, H.264 `yuv420p`, AAC 160k, `+faststart`.
 
 ### Milestones
 
-| # | Milestone | Done when | Size |
-|---|---|---|---|
-| M0 | Bootstrap | repo, config, DB, job table, worker loop, SSE bus, Dockerfile, CI, pytest; **benchmark script** for YuNet, Whisper `small`, one render on the N100 | S |
-| M1 | Download + probe | URL parsing (unit-tested), yt-dlp download, ffprobe + metadata saved, clip row created, errors surfaced | S |
-| M2 | Auto layout | `layout.json` correct on the fixture set; runs in a few seconds per clip on the N100; classifier unit-tested with synthetic detections | M |
-| M3 | Transcribe + captions | German and English transcripts; chunking + ASS writer covered by golden-file tests; umlauts render | M |
-| M4 | Render | filter-graph builder per layout (snapshot-tested); real ffmpeg integration test on a synthetic clip; progress + timeout | M |
-| M5 | API + UI | paste URL, watch stage progress, preview, download, layout dropdown re-render; restart recovery verified | M |
-| M6 | Ship | Docker image runs on the N100, README, measured timing table in the docs | S |
+| # | Milestone | Done when | Size | Status |
+|---|---|---|---|---|
+| M0 | Bootstrap | repo, config, DB, job table, worker loop, SSE bus, Dockerfile, CI, pytest; **benchmark script** for YuNet, Whisper `small`, one render on the N100 | S | Done (`b9b43ee`). Benchmark script exists, not yet run on the N100. |
+| M1 | Download + probe | URL parsing (unit-tested), yt-dlp download, ffprobe + metadata saved, clip row created, errors surfaced | S | Done. Works on a real clip (confirmed by running the container). |
+| M2 | Auto layout | `layout.json` correct on the fixture set; runs in a few seconds per clip on the N100; classifier unit-tested with synthetic detections | M | Done (`961bd8d`). Thresholds are still the starting values; only one real clip seen so far. N100 timing open. |
+| M3 | Transcribe + captions | German and English transcripts; chunking + ASS writer covered by golden-file tests; umlauts render | M | Done (`9d96157`). Real German accuracy and libass width fit only lightly checked. |
+| M4 | Render | filter-graph builder per layout (snapshot-tested); real ffmpeg integration test on a synthetic clip; progress + timeout | M | Done (`1ae3b99`), face layout reworked in `6c9f7ac`. `h264_qsv` unverified. |
+| M5 | API + UI | paste URL, watch stage progress, preview, download, layout dropdown re-render; restart recovery verified | M | Done (`6463710`). Includes `DELETE /api/clips/{id}`. |
+| M6 | Ship | Docker image runs on the N100, README, measured timing table in the docs | S | Open. Image builds and runs locally; no README, no N100 timing table yet. |
+
+### Status and deviations (as built)
+
+- Code lives in `clipshorts/` (flat package) with 242 tests (3 skip: real Whisper and the libass caption tests when the local ffmpeg lacks `ass`). Old code is kept in `reference/`, gitignored.
+- A layout override re-runs only `layout` and `render`: each stage declares the stages whose hashes feed its own (`Stage.after`), so transcribe and captions stay cached.
+- The full pipeline runs end to end and ends in `done` with `output.mp4`.
+- Auto-detection can pick `face`; a clip with a small corner facecam and irrelevant content correctly renders as face-focus (confirmed on a real clip).
+- Repeated `POST /api/clips` for the same slug returns the existing clip (re-queued if it had failed).
+- `AUTH_TOKEN` is also accepted as `?token=` because EventSource and media URLs cannot send headers; `/`, `/static` and `/healthz` are public.
+- 3-5 face frames out of 8 count as `content` with low confidence (not covered by the original rules).
+- `min_font_size` is 30 so very long German compounds shrink instead of overflowing.
+- Progress is persisted every 5% for all stages. yt-dlp is pinned (2026.10.26); format `best` already picks the highest premuxed quality for Twitch clips.
+- GHCR publish builds amd64 only (the N100 target).
+- Known soft spot: a corner facecam of ~460 px upscaled to 1080 px stays somewhat soft. That is a source limit.
 
 ### Fixtures and tests
 
@@ -265,9 +279,9 @@ settings(key, value)
 | Whisper code-switching | German speech with English gaming slang gets transliterated. Mitigate with glossary, LLM correction and the caption editor. |
 | TikTok API | Audit requirements for direct posting. Verify before phase 4 design is final. |
 | Rights | Re-uploading other streamers' clips can conflict with TikTok originality rules and streamer rights. Per-channel approval flag and credit watermark are in phase 4. |
-| Secrets | `ai-twitch-clip-editor-main/backend/.env` was not opened. If it holds real secrets, never copy it into the new repo and rotate if it was committed. |
+| Secrets | `reference/ai-twitch-clip-editor-main/backend/.env` was not opened and `reference/` is gitignored. If it holds real secrets, never copy it into the new repo and rotate if it was committed. |
 | App name | Still a placeholder. |
 
 ## 8. Suggested order of work
 
-M0 benchmark first. If Whisper `small` or the render is too slow on the N100, adjust model size, fps or encoder before writing the rest. Then M1 to M6 in order. Each milestone is shippable on its own and keeps the app runnable.
+M0 to M5 are done. Next: finish M6 (README, run `scripts/benchmark.py` and a real clip on the N100, record the timing table, decide Whisper size, fps cap and whether Quick Sync is needed). Meanwhile collect the fixture clips from section 4 and tune the layout thresholds on them. Then start phase 1.
