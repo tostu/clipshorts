@@ -24,7 +24,8 @@ from .media import Cancelled, MediaError
 
 OUT_W, OUT_H = 1080, 1920
 LOUDNORM = "loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000"
-GRAPH_VERSION = 1  # bump when the graph shape changes so cached outputs are rebuilt
+LOW_RES_UPSCALE = 2.5  # facecam upscale factor above which `low_res_source` is flagged
+GRAPH_VERSION = 2  # bump when the graph shape changes so cached outputs are rebuilt
 ENCODERS = ("libx264", "h264_qsv")
 STDERR_TAIL_LINES = 12
 STDERR_TAIL_CHARS = 1200
@@ -112,6 +113,19 @@ def cover_window(rect: PxRect, tw: int, th: int,
     return PxRect(_even(x), _even(y), cw, ch)
 
 
+def face_fallback_rect(face: Box, sw: int, sh: int) -> Box:
+    """~4:3 (pixels) rect, about 3x face width, centered on the face, clamped to the frame."""
+    w_px = min(3 * face.w * sw, float(sw))
+    h_px = w_px * 3 / 4
+    if h_px > sh:
+        h_px = float(sh)
+        w_px = h_px * 4 / 3
+    w, h = w_px / sw, h_px / sh
+    x = min(max(face.cx - w / 2, 0.0), 1.0 - w)
+    y = min(max(face.cy - h / 2, 0.0), 1.0 - h)
+    return Box(x, y, w, h)
+
+
 def _crop(r: PxRect) -> str:
     return f"crop={r.w}:{r.h}:{r.x}:{r.y}"
 
@@ -194,6 +208,8 @@ def plan_render(layout: dict[str, Any], probe: dict[str, Any], opts: RenderOptio
     if ass_path is not None:
         filters.append("ass")
 
+    plan_extra: dict[str, Any] = {}
+
     def focus_of(box: Box | None) -> tuple[float, float] | None:
         return None if box is None else (box.cx * sw, box.cy * sh)
 
@@ -202,9 +218,27 @@ def plan_render(layout: dict[str, Any], probe: dict[str, Any], opts: RenderOptio
         win = cover_window(to_px(rect, sw, sh), OUT_W, OUT_H, focus_of(face))
         graph = f"{_src(pre)}{_crop(win)},{scale_full},{tail}[vout]"
     elif eff == FACE:
-        cam = boxes.get("facecam") or boxes["face"]
-        win = cover_window(to_px(cam, sw, sh), OUT_W, OUT_H, focus_of(face))
-        graph = f"{_src(pre)}{_crop(win)},{scale_full},{tail}[vout]"
+        cam_box = boxes.get("facecam")
+        if cam_box is None:
+            cam_box = face_fallback_rect(boxes["face"], sw, sh)
+            notes.append("no facecam rect: built one around the face box")
+        cam = to_px(cam_box, sw, sh)
+        upscale = min(OUT_W / cam.w, OUT_H / cam.h)
+        plan_extra["facecam_upscale"] = round(upscale, 2)
+        if upscale > LOW_RES_UPSCALE:
+            notes.append("low_res_source")
+            plan_extra["low_res_source"] = True
+        bw, bh = OUT_W // 4, OUT_H // 4
+        graph = (
+            f"{_src(pre)}split=2[bg][fg];"
+            f"[bg]{_crop(cam)},scale={bw}:{bh}:force_original_aspect_ratio=increase,"
+            f"crop={bw}:{bh},gblur=sigma={opts.blur_sigma:g},scale={OUT_W}:{OUT_H},"
+            f"eq=brightness=-0.2,setsar=1[bgb];"
+            f"[fg]{_crop(cam)},scale={OUT_W}:{OUT_H}:force_original_aspect_ratio=decrease:"
+            f"force_divisible_by=2,setsar=1[fgs];"
+            f"[bgb][fgs]overlay=x=(W-w)/2:y=(H-h)/2,{tail}[vout]"
+        )
+        filters += ["split", "gblur", "overlay", "eq"]
     elif eff == STACKED:
         top_h = _even(OUT_H * split)
         bot_h = OUT_H - top_h
@@ -235,7 +269,7 @@ def plan_render(layout: dict[str, Any], probe: dict[str, Any], opts: RenderOptio
         filters += ["loudnorm", "aresample"]
     plan_params = {**opts.as_dict(), "layout": eff, "requested": requested,
                    "source": [sw, sh], "captions": ass_path is not None,
-                   "audio": has_audio}
+                   "audio": has_audio, **plan_extra}
     return RenderPlan(eff, requested, graph, has_audio, ass_path is not None,
                       sorted(set(filters)), notes, plan_params)
 

@@ -32,6 +32,7 @@ from clipshorts.render import (
     build_command,
     cover_window,
     escape_filter_value,
+    face_fallback_rect,
     parse_progress_seconds,
     plan_render,
     progress_fraction,
@@ -102,6 +103,67 @@ def test_stacked_split_ratio_sets_heights():
     # absurd values are clamped, never produce a zero-height slot
     g = plan_render(layout, PROBE, RenderOptions(split_ratio=5), ASS, FONTS).graph
     assert "scale=1080:1536" in g
+
+
+REAL_PROBE = {"width": 2000, "height": 1075, "fps": 30.0, "has_audio": False}
+REAL_FACE = Box(0.83, 0.05, 0.1, 0.17)
+REAL_CAM = Box(0.77, 0.0, 0.23, 0.33)
+
+
+def test_face_layout_shows_whole_facecam_not_a_9x16_slice():
+    layout = {"type": FACE, "rects": {"face": REAL_FACE.to_list(), "facecam": REAL_CAM.to_list()}}
+    plan = plan_render(layout, REAL_PROBE, RenderOptions(), None, None)
+    assert plan.layout == FACE
+    g = plan.graph
+    assert g.count("crop=460:354:1540:0") == 2  # foreground and blurred background
+    assert "crop=197" not in g
+    assert "force_original_aspect_ratio=decrease" in g and "gblur" in g and "overlay" in g
+    assert g.count("[vout]") == 1 and "split=2" in g
+    assert "low_res_source" not in plan.notes  # ~2.3x upscale is below the 2.5x flag
+    assert plan.params["facecam_upscale"] == 2.35
+
+
+def test_face_layout_flags_low_res_source():
+    cam = Box(0.8, 0.0, 0.2, 0.3)  # 400 px wide -> 2.7x
+    layout = {"type": FACE, "rects": {"face": REAL_FACE.to_list(), "facecam": cam.to_list()}}
+    plan = plan_render(layout, REAL_PROBE, RenderOptions(), None, None)
+    assert plan.layout == FACE and "low_res_source" in plan.notes
+    assert plan.params["low_res_source"] is True
+
+
+def test_face_layout_without_facecam_builds_rect_around_face():
+    layout = {"type": FACE, "rects": {"face": REAL_FACE.to_list()}}
+    plan = plan_render(layout, REAL_PROBE, RenderOptions(), None, None)
+    assert plan.layout == FACE and any("around the face" in n for n in plan.notes)
+    # 3x face width = 600 px, 4:3 -> 450 px tall; clamped inside the frame
+    assert "crop=600:450:" in plan.graph
+
+
+def test_face_fallback_rect_clamps_to_frame():
+    r = face_fallback_rect(Box(0.95, 0.9, 0.05, 0.1), 2000, 1075)
+    assert 0 <= r.x and r.right <= 1.0 + 1e-9 and 0 <= r.y and r.bottom <= 1.0 + 1e-9
+    r = face_fallback_rect(Box(0.2, 0.2, 0.6, 0.6), 2000, 1075)  # huge face: capped to frame
+    assert r.w <= 1.0 and r.h <= 1.0 and abs(r.w * 2000 / (r.h * 1075) - 4 / 3) < 0.01
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
+def test_face_layout_real_ffmpeg_output_is_1080x1920(tmp_path):
+    src, out = tmp_path / "src.mp4", tmp_path / "out.mp4"
+    # 1074 high: yuv420p test source needs an even height (the real clip is 1075)
+    subprocess.run(
+        ["ffmpeg", "-nostdin", "-v", "error", "-f", "lavfi", "-i",
+         "color=c=0x303030:s=2000x1074:r=30:d=1", "-f", "lavfi", "-i",
+         "testsrc2=s=460x350:r=30:d=1", "-filter_complex", "[0][1]overlay=x=1540:y=0",
+         "-pix_fmt", "yuv420p", str(src)],
+        check=True, capture_output=True)
+    layout = {"type": FACE, "rects": {"face": REAL_FACE.to_list(), "facecam": REAL_CAM.to_list()}}
+    plan = plan_render(layout, {**REAL_PROBE, "height": 1074}, RenderOptions(), None, None)
+    cmd = build_command("ffmpeg", src, out, plan, RenderOptions())
+    subprocess.run(cmd, check=True, capture_output=True)
+    res = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+         "stream=width,height", "-of", "csv=p=0", str(out)], capture_output=True, text=True)
+    assert res.stdout.strip() == "1080,1920"
 
 
 def test_missing_rects_fall_back_to_content():
