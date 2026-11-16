@@ -5,6 +5,7 @@ fixed set, de-duplicated and capped. The text can be edited by hand; export buil
 per-platform copy-paste text.
 """
 
+import json
 import re
 
 from .config import Config
@@ -41,10 +42,23 @@ def clip_text(text: str, limit: int) -> str:
     return text[: limit - 1].rstrip() + "…"
 
 
+def creator_name(cfg: Config, clip: Clip) -> str:
+    """The streamer the clip is from. yt-dlp's `creator` is the broadcaster; its `channel` /
+    `uploader` is whoever made the clip, so that is only a fallback (and clip.channel, set from
+    the URL or older runs, after it)."""
+    try:
+        creator = json.loads((cfg.clip_dir(clip.id) / "meta.json").read_text())["twitch"]["creator"]
+    except (OSError, ValueError, KeyError, TypeError):
+        creator = None
+    return creator if isinstance(creator, str) and creator.strip() else (clip.channel or "")
+
+
 def default_metadata(cfg: Config, clip: Clip) -> Metadata:
-    """Clip title as title, hashtags = creator, game, then the fixed set."""
-    tags = merge_hashtags([clip.channel or "", clip.game or "", *cfg.fixed_hashtag_list],
-                          cfg.max_hashtags)
+    """Clip title as title, hashtags = creator, creator+clips, game, then the fixed set."""
+    creator = clean_tag(creator_name(cfg, clip))
+    tags = merge_hashtags(
+        [creator, creator + "clips" if creator else "", clip.game or "", *cfg.fixed_hashtag_list],
+        cfg.max_hashtags)
     return Metadata(title=clip_text(clip.title or "", TITLE_MAX), hashtags=tags, source="auto")
 
 

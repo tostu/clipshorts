@@ -41,8 +41,8 @@ class Config(BaseSettings):
     # Metadata (phase 4): title = clip title, hashtags = creator + game + the fixed set below.
     # Comma-separated tags added to every short (no leading #), after creator and game.
     # Picked from gaming-clip hashtag guides: Twitch-specific + broad reach, kept short.
-    fixed_hashtags: str = "twitchclips,twitch,gaming,fyp"
-    max_hashtags: int = 8
+    fixed_hashtags: str = "twitchclips,twitch,gaming,fyp,deutsch,twitchde"
+    max_hashtags: int = 10
 
     ffmpeg_bin: str = "ffmpeg"
     ffprobe_bin: str = "ffprobe"

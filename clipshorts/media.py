@@ -59,8 +59,10 @@ def ytdlp_download(
     return {
         "id": info.get("id"),
         "title": info.get("title"),
-        "channel": info.get("uploader") or info.get("channel"),
+        # yt-dlp: `creator` = broadcaster (the streamer), `uploader`/`channel` = who clipped it
+        "channel": info.get("creator") or info.get("uploader") or info.get("channel"),
         "creator": info.get("creator"),
+        "clipper": info.get("uploader") or info.get("channel"),
         "game": info.get("game") or (cats[0] if cats else None),
         "duration": info.get("duration"),
         "view_count": info.get("view_count"),

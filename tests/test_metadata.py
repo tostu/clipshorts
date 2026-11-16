@@ -49,24 +49,37 @@ def test_default_metadata_title_creator_game_then_fixed(cfg):
     clip = _clip(title="Big Play", game="Counter-Strike 2", channel="SomeStreamer")
     m = md.default_metadata(cfg, clip)
     assert m.source == "auto" and m.title == "Big Play" and m.caption == ""
-    assert m.hashtags == ["SomeStreamer", "CounterStrike2", "twitchclips", "twitch", "gaming",
-                          "fyp"]
+    assert m.hashtags == ["SomeStreamer", "SomeStreamerclips", "CounterStrike2", "twitchclips",
+                          "twitch", "gaming", "fyp", "deutsch", "twitchde"]
+
+
+def test_creator_comes_from_twitch_metadata_not_the_clipper(cfg):
+    """yt-dlp: creator = streamer, channel/uploader = who made the clip (German4Media)."""
+    clip = _clip(id=7, channel="German4Media", game="Just Chatting")
+    d = cfg.clip_dir(7)
+    d.mkdir(parents=True)
+    (d / "meta.json").write_text(
+        '{"twitch": {"channel": "German4Media", "creator": "Papaplatte"}}')
+    tags = md.default_metadata(cfg, clip).hashtags
+    assert tags[:3] == ["Papaplatte", "Papaplatteclips", "JustChatting"]
+    assert "German4Media" not in tags
 
 
 def test_default_metadata_without_creator_or_game(cfg):
     m = md.default_metadata(cfg, _clip())
-    assert m.hashtags == ["twitchclips", "twitch", "gaming", "fyp"] and m.title == ""
+    assert m.hashtags == ["twitchclips", "twitch", "gaming", "fyp", "deutsch", "twitchde"]
+    assert m.title == ""
 
 
 def test_default_metadata_dedups_creator_equal_to_fixed(cfg):
-    assert md.default_metadata(cfg, _clip(channel="Twitch")).hashtags[:2] == [
-        "Twitch", "twitchclips"]
+    assert md.default_metadata(cfg, _clip(channel="Twitch")).hashtags == [
+        "Twitch", "Twitchclips", "gaming", "fyp", "deutsch", "twitchde"]
 
 
 def test_default_metadata_caps_and_trims(cfg):
     small = cfg.model_copy(update={"max_hashtags": 3})
     m = md.default_metadata(small, _clip(title="x" * 200, channel="c", game="g"))
-    assert m.hashtags == ["c", "g", "twitchclips"]
+    assert m.hashtags == ["c", "cclips", "g"]
     assert len(m.title) == md.TITLE_MAX and m.title.endswith("…")
 
 
@@ -92,12 +105,13 @@ def test_defaults(client, cfg):
     cid = _done_clip(client, cfg)
     body = client.get(f"/api/clips/{cid}/metadata").json()
     assert body["source"] == "auto" and body["title"] == "Big Play"
-    assert body["hashtags"] == ["somestreamer", "Tetris", "twitchclips", "twitch", "gaming",
-                                "fyp"]
+    assert body["hashtags"] == ["somestreamer", "somestreamerclips", "Tetris", "twitchclips",
+                                "twitch", "gaming", "fyp", "deutsch", "twitchde"]
     ex = client.get(f"/api/clips/{cid}/export").json()
     assert ex["download_url"] == f"/api/clips/{cid}/output?download=1"
     assert ex["platforms"]["tiktok"]["caption"] == (
-        "Big Play\n\n#somestreamer #Tetris #twitchclips #twitch #gaming #fyp")
+        "Big Play\n\n#somestreamer #somestreamerclips #Tetris #twitchclips #twitch #gaming "
+        "#fyp #deutsch #twitchde")
     assert ex["platforms"]["youtube"]["title"] == "Big Play"
     assert ex["platforms"]["youtube"]["description"].endswith("#Shorts")
 

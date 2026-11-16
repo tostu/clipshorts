@@ -67,7 +67,7 @@ Environment variables or `.env` (see `.env.example`):
 | `X264_PRESET` / `X264_CRF` | `veryfast` / `20` | x264 quality settings |
 | `RENDER_SPLIT_RATIO` | `0.38` | Stacked layout: facecam share of output height |
 | `RENDER_TIMEOUT_FACTOR` / `RENDER_TIMEOUT_MIN_S` | `8` / `120` | Render timeout = factor x clip duration, at least the minimum |
-| `FIXED_HASHTAGS` / `MAX_HASHTAGS` | `twitchclips,twitch,gaming,fyp` / `8` | Hashtags are creator + game + this set (no `#`), capped at the max |
+| `FIXED_HASHTAGS` / `MAX_HASHTAGS` | `twitchclips,twitch,gaming,fyp,deutsch,twitchde` / `10` | Hashtags are creator, `<creator>clips`, game + this set (no `#`), capped at the max |
 | `NICE_LEVEL` | `10` | Worker niceness |
 | `LOG_LEVEL` | `INFO` | Log level |
 
@@ -95,7 +95,7 @@ DELETE /api/publications/{id}
 GET    /api/report/ratings                 channel x layout x rating counts
 ```
 
-A clip's post text is its Twitch title plus hashtags `#<creator> #<game> #twitchclips #twitch #gaming #fyp` (creator = channel from the clip URL, or from Twitch metadata for `clips.twitch.tv` links; set `FIXED_HASHTAGS` to change the fixed part). No LLM involved. The UI shows this under "Post text and publishing" on every finished clip. Export is manual: download the MP4 and copy the caption. TikTok/YouTube/Instagram upload is not built.
+A clip's post text is its Twitch title plus hashtags `#<creator> #<creator>clips #<game> #twitchclips #twitch #gaming #fyp #deutsch #twitchde` (creator = the streamer from the Twitch metadata, not whoever clipped it; set `FIXED_HASHTAGS` to change the fixed part). No LLM involved. The UI shows this under "Post text and publishing" on every finished clip. Export is manual: download the MP4 and copy the caption. TikTok/YouTube/Instagram upload is not built.
 
 Posting a slug that already exists returns the existing clip (and re-queues it if it had failed).
 
