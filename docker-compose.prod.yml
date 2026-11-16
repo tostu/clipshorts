@@ -1,0 +1,31 @@
+# Deploy from the published image (no build, no .env needed):
+#   docker compose -f docker-compose.prod.yml pull
+#   docker compose -f docker-compose.prod.yml up -d
+# Private package? `docker login ghcr.io` first.
+#
+# TODO: no git remote existed when this file was written. Replace OWNER/REPO with the GitHub
+# owner and repo that publishes the image (lowercase), or set CLIPSHORTS_IMAGE in your shell/.env.
+services:
+  clipshorts:
+    image: ${CLIPSHORTS_IMAGE:-ghcr.io/OWNER/REPO:latest}
+    container_name: clipshorts
+    restart: unless-stopped
+    user: "${PUID:-1000}:${PGID:-1000}"  # must own ./data
+    environment:
+      TZ: ${TZ:-Europe/Berlin}
+      # Optional app token: open http://host:8000/?token=<value> or send a Bearer header.
+      AUTH_TOKEN: ${AUTH_TOKEN:-}
+      LANGUAGES: ${LANGUAGES:-de,en}
+      WHISPER_MODEL: ${WHISPER_MODEL:-small}
+      FPS_CAP: ${FPS_CAP:-30}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    volumes:
+      - ./data:/data
+    # Optional Quick Sync (untested): mount the iGPU and set VIDEO_ENCODER=h264_qsv
+    # devices:
+    #   - /dev/dri:/dev/dri
+    ports:
+      # Bind to the Tailscale IP (`tailscale ip -4`) or the LAN IP, never 0.0.0.0 on a public host.
+      - "${BIND_ADDR:-127.0.0.1}:${PORT:-8000}:8000"
+    # healthcheck comes from the image (python -m clipshorts.healthcheck)
+    stop_grace_period: 30s

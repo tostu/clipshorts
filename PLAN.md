@@ -141,7 +141,7 @@ Output 1080x1920, H.264 `yuv420p`, AAC 160k, `+faststart`.
 | M3 | Transcribe + captions | German and English transcripts; chunking + ASS writer covered by golden-file tests; umlauts render | M | Done (`9d96157`). Real German accuracy and libass width fit only lightly checked. |
 | M4 | Render | filter-graph builder per layout (snapshot-tested); real ffmpeg integration test on a synthetic clip; progress + timeout | M | Done (`1ae3b99`), face layout reworked in `6c9f7ac`. `h264_qsv` unverified. |
 | M5 | API + UI | paste URL, watch stage progress, preview, download, layout dropdown re-render; restart recovery verified | M | Done (`6463710`). Includes `DELETE /api/clips/{id}`. |
-| M6 | Ship | Docker image runs on the N100, README, measured timing table in the docs | S | Open. Image builds and runs locally; no README, no N100 timing table yet. |
+| M6 | Ship | Docker image runs on the N100, README, measured timing table in the docs | S | Mostly done. README, `docker-compose.prod.yml`, CI + GHCR publish workflows in place; image built and smoke-tested locally. Open: N100 timing (see below). |
 
 ### Status and deviations (as built)
 
@@ -155,6 +155,8 @@ Output 1080x1920, H.264 `yuv420p`, AAC 160k, `+faststart`.
 - `min_font_size` is 30 so very long German compounds shrink instead of overflowing.
 - Progress is persisted every 5% for all stages. yt-dlp is pinned (2026.10.26); format `best` already picks the highest premuxed quality for Twitch clips.
 - GHCR publish builds amd64 only (the N100 target).
+- M6: `README.md` (quick start, config, API, data layout, layouts, limits, tests, performance, Quick Sync note) and `docker-compose.prod.yml` (image from GHCR, `CLIPSHORTS_IMAGE`, image name still `OWNER/REPO` placeholder because no git remote existed). CI runs ruff + pytest and a `docker-smoke` job (build, `import clipshorts.main`, healthcheck). The publish workflow pushes `latest`, `sha-*` and semver tags to GHCR (amd64, gha cache); neither workflow has run on GitHub yet. The Docker image was built and smoke-tested locally (arm64 Docker Desktop, not amd64).
+- M6 still open: the benchmark ran only on an Apple M4 (YuNet 3.7 ms/frame, 3.3 s render of a 30 s clip; Whisper with a tone, not speech). The Intel N100 row in the README is empty: run `scripts/benchmark.py` with real speech and time one real clip end to end there, then decide Whisper size, fps cap and whether Quick Sync is needed. `h264_qsv` stays untested.
 - Known soft spot: a corner facecam of ~460 px upscaled to 1080 px stays somewhat soft. That is a source limit.
 
 ### Fixtures and tests
@@ -284,4 +286,4 @@ settings(key, value)
 
 ## 8. Suggested order of work
 
-M0 to M5 are done. Next: finish M6 (README, run `scripts/benchmark.py` and a real clip on the N100, record the timing table, decide Whisper size, fps cap and whether Quick Sync is needed). Meanwhile collect the fixture clips from section 4 and tune the layout thresholds on them. Then start phase 1.
+M0 to M5 are done and M6 is mostly done. Next: set the real GHCR image name in `docker-compose.prod.yml`, push to run the workflows, then run `scripts/benchmark.py` and a real clip on the N100, record the timing table in the README, decide Whisper size, fps cap and whether Quick Sync is needed. Meanwhile collect the fixture clips from section 4 and tune the layout thresholds on them. Then start phase 1.
