@@ -1,0 +1,21 @@
+services:
+  clipshorts:
+    build: .
+    container_name: clipshorts
+    restart: unless-stopped
+    # Run as your host user so ./data is writable: `export UID GID` or set in .env
+    user: "${PUID:-1000}:${PGID:-1000}"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      TZ: ${TZ:-UTC}
+    volumes:
+      - ./data:/data
+    # Optional Quick Sync (later): uncomment and mount the iGPU
+    # devices:
+    #   - /dev/dri:/dev/dri
+    ports:
+      # Bind to the Tailscale IP only (`tailscale ip -4`), never 0.0.0.0 on a public host.
+      - "${BIND_ADDR:-127.0.0.1}:${PORT:-8000}:8000"
+    stop_grace_period: 30s
