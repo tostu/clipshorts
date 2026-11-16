@@ -21,6 +21,14 @@ class Config(BaseSettings):
 
     whisper_model: str = "small"
     whisper_compute_type: str = "int8"
+    # Model is unloaded after this many idle minutes (<= 0: right after each transcription)
+    whisper_idle_minutes: float = 5.0
+    whisper_download_root: Path | None = None
+    whisper_threads: int = 0  # 0 = faster-whisper default
+
+    # Captions (PlayRes is fixed at 1080x1920)
+    caption_font_size: int = 84
+    caption_max_words: int = 3
     fps_cap: int = 30
 
     ffmpeg_bin: str = "ffmpeg"
@@ -48,6 +56,11 @@ class Config(BaseSettings):
     @property
     def yunet_model_path(self) -> Path:
         return self.yunet_model or Path(__file__).parent / "models" / YUNET_FILE
+
+    @property
+    def fonts_dir(self) -> Path:
+        """Bundled OFL font directory; pass to ffmpeg's ass filter as fontsdir."""
+        return Path(__file__).parent / "fonts"
 
     @property
     def db_path(self) -> Path:

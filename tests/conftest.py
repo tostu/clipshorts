@@ -38,6 +38,18 @@ class FakeTools:
         self.fail_probe = fail_probe
         self.fail_analyze: str | None = None
         self.analysis_faces: list[Face] | None = None
+        self.transcriptions: list[dict] = []
+        self.fail_transcribe: str | None = None
+        self.transcript: dict = {
+            "version": 1, "language": "de", "language_source": "auto",
+            "segments": [],
+            "words": [
+                {"word": "Das", "start": 0.0, "end": 0.3},
+                {"word": "ist", "start": 0.3, "end": 0.5},
+                {"word": "krass.", "start": 0.5, "end": 1.0},
+                {"word": "Wirklich", "start": 1.2, "end": 1.6},
+            ],
+        }
 
     def download(self, url, dest, fmt="best", on_progress=None):
         self.downloads.append(url)
@@ -82,9 +94,20 @@ class FakeTools:
             dets = [list(self.analysis_faces) for _ in range(n)]
         return FrameAnalysis((640, 360), dets, None)
 
+    def transcribe(self, audio, *, cfg=None, language=None, allowed=None, prompt=None,
+                   on_progress=None):
+        self.transcriptions.append({"audio": str(audio), "language": language,
+                                    "allowed": allowed, "prompt": prompt})
+        if on_progress:
+            on_progress(1.0)
+        if self.fail_transcribe:
+            raise MediaError(self.fail_transcribe)
+        return {**self.transcript, "language": language or self.transcript["language"]}
+
     def as_tools(self) -> Tools:
         return Tools(download=self.download, probe=self.probe,
-                     extract_frames=self.extract_frames, analyze_frames=self.analyze_frames)
+                     extract_frames=self.extract_frames, analyze_frames=self.analyze_frames,
+                     transcribe=self.transcribe)
 
 
 @pytest.fixture

@@ -19,8 +19,8 @@ def _layout(cfg, cid):
 def test_layout_stage_writes_json_and_db_row(cfg, db, bus, fake_tools):
     c = _clip(db)
     res = run_pipeline(c.id, cfg, db, bus, fake_tools.as_tools())
-    assert res.ran == ["download", "probe", "layout"]
-    assert res.status == "waiting" and res.stage == "transcribe"
+    assert res.ran == ["download", "probe", "layout", "transcribe", "captions"]
+    assert res.status == "waiting" and res.stage == "render"
     data = _layout(cfg, c.id)
     assert data["type"] == "fullcam" and data["source"] == "auto"
     assert set(data["rects"]) == {"face", "crop"}

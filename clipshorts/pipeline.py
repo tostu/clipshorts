@@ -2,8 +2,9 @@
 
 Every stage writes its artifacts under data/clips/<id>/ and records a params_hash in
 stages.json. A stage is skipped when its hash matches and its artifacts still exist.
-The hash chains over the upstream stage hash, so changing an early input invalidates
-everything after it, while a late change (e.g. a layout override) only re-runs the tail.
+The hash chains over the hashes of the stages named in `Stage.after` (default: the previous
+stage), so changing an input invalidates only the stages that really depend on it. A layout
+override re-runs layout + render; transcribe and captions stay cached.
 """
 
 import hashlib
@@ -15,6 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .captions import FONT_FILE, CaptionStyle, captions_from_transcript
 from .config import Config
 from .db import DB
 from .events import EventBus
@@ -32,6 +34,7 @@ from .layout import (
 )
 from .media import MediaError, Tools
 from .models import Clip
+from .transcribe import WHISPER_SETTINGS, build_prompt, empty_transcript
 
 log = logging.getLogger(__name__)
 
@@ -59,6 +62,9 @@ class Stage:
     artifacts: list[str]
     params: Callable[[Clip, Config], dict[str, Any]]
     run: Callable[[StageContext], None] | None = None  # None = not implemented yet
+    # Stages whose hash feeds this stage's hash. None = the previous stage in the list.
+    # Lets e.g. transcribe depend on probe only, so a layout override re-runs only render.
+    after: tuple[str, ...] | None = None
 
 
 # -- hashing / state -------------------------------------------------------
@@ -254,17 +260,74 @@ def _layout(ctx: StageContext) -> None:
                        layout_confidence=final["confidence"])
 
 
+# -- transcribe + captions (M3) ----------------------------------------------------------
+TRANSCRIPT_FILE = "transcript.json"
+CAPTIONS_FILE = "captions.ass"
+
+
+def _manual_language(clip: Clip) -> str | None:
+    lang = (clip.language or "").strip().lower()
+    return None if lang in ("", "auto") else lang
+
+
+def _transcribe_params(clip: Clip, cfg: Config) -> dict[str, Any]:
+    return {
+        "language": _manual_language(clip),
+        "allowed": cfg.language_list,
+        "model": cfg.whisper_model,
+        "compute": cfg.whisper_compute_type,
+        "prompt": build_prompt(clip.title, clip.game, clip.channel),
+        "whisper": WHISPER_SETTINGS,
+    }
+
+
+def _transcribe(ctx: StageContext) -> None:
+    d = ctx.dir
+    probe = _read_json(d / "meta.json").get("ffprobe", {})
+    language = _manual_language(ctx.clip)
+    if probe.get("has_audio") is False:
+        data = empty_transcript(language or (ctx.cfg.language_list or [""])[0], "no-audio")
+    else:
+        data = ctx.tools.transcribe(
+            d / "source.mp4", cfg=ctx.cfg, language=language, allowed=ctx.cfg.language_list,
+            prompt=build_prompt(ctx.clip.title, ctx.clip.game, ctx.clip.channel),
+            on_progress=ctx.progress,
+        )
+    tmp = d / (TRANSCRIPT_FILE + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+    tmp.replace(d / TRANSCRIPT_FILE)
+
+
+def _caption_style(cfg: Config) -> CaptionStyle:
+    return CaptionStyle(font_size=cfg.caption_font_size, max_words=cfg.caption_max_words)
+
+
+def _captions_params(clip: Clip, cfg: Config) -> dict[str, Any]:
+    font = cfg.fonts_dir / FONT_FILE
+    return {"style": _caption_style(cfg).as_dict(), "font": FONT_FILE,
+            "font_bytes": font.stat().st_size if font.is_file() else None}
+
+
+def _captions(ctx: StageContext) -> None:
+    transcript = _read_json(ctx.dir / TRANSCRIPT_FILE)
+    ass, _ = captions_from_transcript(transcript, _caption_style(ctx.cfg),
+                                      ctx.cfg.fonts_dir / FONT_FILE)
+    tmp = ctx.dir / (CAPTIONS_FILE + ".tmp")
+    tmp.write_text(ass, encoding="utf-8")
+    tmp.replace(ctx.dir / CAPTIONS_FILE)
+
+
+# transcribe depends on the source only (probe); captions on the transcript; render on
+# captions AND layout. A layout override therefore re-runs layout + render, nothing else.
 STAGES: list[Stage] = [
     Stage("download", ["source.mp4"],
           lambda c, cfg: {"slug": c.slug, "format": cfg.ytdlp_format}, _download),
     Stage("probe", ["meta.json"], lambda c, cfg: {}, _probe),
     Stage("layout", [LAYOUT_FILE], _layout_params, _layout),
-    Stage("transcribe", ["transcript.json"],
-          lambda c, cfg: {"language": c.language, "allowed": cfg.language_list,
-                          "model": cfg.whisper_model, "compute": cfg.whisper_compute_type}),
-    Stage("captions", ["captions.ass"], lambda c, cfg: {"language": c.language}),
-    Stage("render", ["output.mp4"],
-          lambda c, cfg: {"layout": c.layout_override, "fps_cap": cfg.fps_cap}),
+    Stage("transcribe", [TRANSCRIPT_FILE], _transcribe_params, _transcribe, after=("probe",)),
+    Stage("captions", [CAPTIONS_FILE], _captions_params, _captions, after=("transcribe",)),
+    Stage("render", ["output.mp4"], lambda c, cfg: {"fps_cap": cfg.fps_cap}, None,
+          after=("captions", "layout")),
 ]
 
 
@@ -302,11 +365,15 @@ def run_pipeline(
             bus.publish("clip", updated.model_dump())
 
     emit(status="running", error=None)
-    upstream = ""
+    hashes: dict[str, str] = {}
+    prev_name = ""
     for idx, stage in enumerate(stages):
         clip = db.get_clip(clip_id) or clip  # may have been updated by previous stage
+        deps = stage.after if stage.after is not None else ((prev_name,) if prev_name else ())
+        upstream = "|".join(hashes.get(n, "") for n in deps)
         h = params_hash(stage.name, stage.params(clip, cfg), upstream)
-        upstream = h
+        hashes[stage.name] = h
+        prev_name = stage.name
         if is_fresh(stage, clip_dir, state, h):
             result.skipped.append(stage.name)
             emit(stage=stage.name, progress=(idx + 1) / total)

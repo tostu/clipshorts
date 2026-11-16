@@ -163,6 +163,13 @@ def analyze_frames_yunet(det_paths: list[Path], model_path: Path, score_threshol
     return analyze_with_yunet(det_paths, model_path, score_threshold, on_progress)
 
 
+def transcribe_audio(audio: Path, **kwargs: Any) -> dict[str, Any]:
+    """Default transcriber (lazy import keeps faster-whisper out of the unit-test path)."""
+    from .transcribe import default_transcribe
+
+    return default_transcribe(audio, **kwargs)
+
+
 @dataclass
 class Tools:
     """Injectable external calls. Tests replace the callables."""
@@ -171,6 +178,8 @@ class Tools:
     probe: Callable[..., dict[str, Any]] = ffprobe
     extract_frames: Callable[..., list[SampledFrame]] = ffmpeg_extract_frames
     analyze_frames: Callable[..., Any] = analyze_frames_yunet
+    # (audio_path, *, cfg, language, allowed, prompt, on_progress) -> transcript dict
+    transcribe: Callable[..., dict[str, Any]] = transcribe_audio
 
 
 def default_tools(cfg: Config) -> Tools:
