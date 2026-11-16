@@ -41,6 +41,53 @@ class RerenderBody(BaseModel):
     layout: LayoutChoice | None = None  # None = keep the current layout choice
 
 
+Platform = Literal["tiktok", "youtube", "instagram", "other"]
+Rating = Literal["good", "ok", "flop"]
+
+
+class Metadata(BaseModel):
+    """Post text for one short. `hashtags` has no leading '#'."""
+    title: str = ""  # hook line, also the YouTube Shorts title
+    caption: str = ""  # TikTok / Reels caption (without hashtags)
+    hashtags: list[str] = []
+    source: str = "manual"  # auto (defaults, not stored) | llm | manual
+    updated_at: str | None = None
+    llm_enabled: bool = False  # set by the API; the UI hides the generate button when false
+
+
+class MetadataUpdate(BaseModel):
+    title: str | None = None
+    caption: str | None = None
+    hashtags: list[str] | None = None
+
+
+class PublicationCreate(BaseModel):
+    platform: Platform
+    url: str | None = None
+    published_at: str | None = None  # ISO; defaults to now
+    views_24h: int | None = None
+    rating: Rating | None = None
+    note: str | None = None
+
+
+class PublicationUpdate(BaseModel):
+    url: str | None = None
+    views_24h: int | None = None
+    rating: Rating | None = None
+    note: str | None = None
+
+
+class Publication(BaseModel):
+    id: int
+    clip_id: int
+    platform: str
+    url: str | None = None
+    published_at: str
+    views_24h: int | None = None
+    rating: str | None = None
+    note: str | None = None
+
+
 class Job(BaseModel):
     id: int
     kind: str

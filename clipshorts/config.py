@@ -25,7 +25,6 @@ class Config(BaseSettings):
     whisper_idle_minutes: float = 5.0
     whisper_download_root: Path | None = None
     whisper_threads: int = 0  # 0 = faster-whisper default
-
     # Captions (PlayRes is fixed at 1080x1920)
     caption_font_size: int = 84
     caption_max_words: int = 3
@@ -38,6 +37,19 @@ class Config(BaseSettings):
     render_split_ratio: float = 0.38  # stacked layout: facecam share of the output height
     render_timeout_factor: float = 8.0  # wall-clock limit = factor x clip duration ...
     render_timeout_min_s: float = 120.0  # ... but never below this
+
+    # Metadata (phase 4). Default: no LLM, hashtags = creator + game + the fixed set below.
+    # LLM_ENABLED=true turns on on-demand generation via local Ollama (structured output); it
+    # never runs in the pipeline, so a missing LLM cannot fail a render. keep_alive 0 frees RAM.
+    llm_enabled: bool = False
+    llm_url: str = "http://localhost:11434"
+    llm_model: str = "gemma3:4b"
+    llm_timeout_s: float = 300.0
+    llm_keep_alive: str = "0"
+    # Comma-separated tags added to every short (no leading #), after creator and game.
+    # Picked from gaming-clip hashtag guides: Twitch-specific + broad reach, kept short.
+    fixed_hashtags: str = "twitchclips,twitch,gaming,fyp"
+    max_hashtags: int = 8
 
     ffmpeg_bin: str = "ffmpeg"
     ffprobe_bin: str = "ffprobe"
@@ -60,6 +72,10 @@ class Config(BaseSettings):
     @property
     def language_list(self) -> list[str]:
         return [x.strip().lower() for x in self.languages.split(",") if x.strip()]
+
+    @property
+    def fixed_hashtag_list(self) -> list[str]:
+        return [t for t in (x.strip().lstrip("#") for x in self.fixed_hashtags.split(",")) if t]
 
     @property
     def yunet_model_path(self) -> Path:

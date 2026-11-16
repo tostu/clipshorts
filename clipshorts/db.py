@@ -10,7 +10,7 @@ import threading
 from datetime import UTC, datetime
 from pathlib import Path
 
-from .models import Clip, Job
+from .models import Clip, Job, Metadata, Publication
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS clips (
@@ -42,6 +42,25 @@ CREATE TABLE IF NOT EXISTS renders (
     path TEXT,
     created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS clip_metadata (
+    clip_id INTEGER PRIMARY KEY REFERENCES clips(id) ON DELETE CASCADE,
+    title TEXT NOT NULL DEFAULT '',
+    caption TEXT NOT NULL DEFAULT '',
+    hashtags_json TEXT NOT NULL DEFAULT '[]',
+    source TEXT NOT NULL DEFAULT 'manual',
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS publications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    clip_id INTEGER NOT NULL REFERENCES clips(id) ON DELETE CASCADE,
+    platform TEXT NOT NULL,
+    url TEXT,
+    published_at TEXT NOT NULL,
+    views_24h INTEGER,
+    rating TEXT,
+    note TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_publications_clip ON publications(clip_id);
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -179,6 +198,82 @@ class DB:
         d = dict(r)
         d["params"] = json.loads(d.pop("params_json") or "{}")
         return d
+
+    # -- metadata (phase 4) ---------------------------------------------
+    def get_metadata(self, clip_id: int) -> Metadata | None:
+        r = self._one("SELECT * FROM clip_metadata WHERE clip_id=?", (clip_id,))
+        if not r:
+            return None
+        return Metadata(title=r["title"], caption=r["caption"],
+                        hashtags=json.loads(r["hashtags_json"] or "[]"),
+                        source=r["source"], updated_at=r["updated_at"])
+
+    def set_metadata(self, clip_id: int, title: str, caption: str, hashtags: list[str],
+                     source: str) -> Metadata:
+        self._exec(
+            "INSERT INTO clip_metadata(clip_id, title, caption, hashtags_json, source, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(clip_id) DO UPDATE SET "
+            "title=excluded.title, caption=excluded.caption, "
+            "hashtags_json=excluded.hashtags_json, source=excluded.source, "
+            "updated_at=excluded.updated_at",
+            (clip_id, title, caption, json.dumps(hashtags, ensure_ascii=False), source, now_iso()),
+        )
+        m = self.get_metadata(clip_id)
+        assert m
+        return m
+
+    # -- publications ---------------------------------------------------
+    def add_publication(self, clip_id: int, platform: str, url: str | None = None,
+                        published_at: str | None = None, views_24h: int | None = None,
+                        rating: str | None = None, note: str | None = None) -> Publication:
+        cur = self._exec(
+            "INSERT INTO publications(clip_id, platform, url, published_at, views_24h, rating, "
+            "note) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (clip_id, platform, url, published_at or now_iso(), views_24h, rating, note),
+        )
+        p = self.get_publication(cur.lastrowid)
+        assert p
+        return p
+
+    def get_publication(self, pub_id: int) -> Publication | None:
+        r = self._one("SELECT * FROM publications WHERE id=?", (pub_id,))
+        return Publication(**dict(r)) if r else None
+
+    def list_publications(self, clip_id: int) -> list[Publication]:
+        rows = self._all("SELECT * FROM publications WHERE clip_id=? ORDER BY id", (clip_id,))
+        return [Publication(**dict(r)) for r in rows]
+
+    def update_publication(self, pub_id: int, **fields) -> Publication | None:
+        allowed = {"url", "views_24h", "rating", "note"}
+        sets, args = [], []
+        for k, v in fields.items():
+            if k not in allowed:
+                raise ValueError(k)
+            sets.append(f"{k}=?")
+            args.append(v)
+        if sets:
+            self._exec(f"UPDATE publications SET {', '.join(sets)} WHERE id=?", (*args, pub_id))
+        return self.get_publication(pub_id)
+
+    def delete_publication(self, pub_id: int) -> bool:
+        return self._exec("DELETE FROM publications WHERE id=?", (pub_id,)).rowcount > 0
+
+    def rating_report(self) -> list[dict]:
+        """channel x layout x rating counts, the only reporting phase 4 has."""
+        rows = self._all(
+            "SELECT COALESCE(c.channel, '') AS channel, COALESCE(c.layout_type, '') AS layout, "
+            "p.rating AS rating, COUNT(*) AS n FROM publications p "
+            "JOIN clips c ON c.id = p.clip_id WHERE p.rating IS NOT NULL "
+            "GROUP BY 1, 2, 3 ORDER BY 1, 2, 3"
+        )
+        table: dict[tuple[str, str], dict] = {}
+        for r in rows:
+            row = table.setdefault(
+                (r["channel"], r["layout"]),
+                {"channel": r["channel"], "layout": r["layout"], "good": 0, "ok": 0, "flop": 0},
+            )
+            row[r["rating"]] = r["n"]
+        return list(table.values())
 
     # -- jobs -----------------------------------------------------------
     @staticmethod

@@ -8,9 +8,19 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse
 
+from . import metadata as metadata_mod
 from .db import DB
 from .events import EventBus
-from .models import Clip, ClipCreate, RerenderBody
+from .models import (
+    Clip,
+    ClipCreate,
+    Metadata,
+    MetadataUpdate,
+    Publication,
+    PublicationCreate,
+    PublicationUpdate,
+    RerenderBody,
+)
 from .pipeline import OUTPUT_FILE, TRANSCRIPT_FILE
 from .twitch import ClipUrlError, parse_clip_url
 from .worker import Worker
@@ -132,6 +142,120 @@ def get_output(request: Request, clip_id: int, download: bool = False):
         path, media_type="video/mp4", filename=f"{clip.slug}.mp4",
         content_disposition_type="attachment" if download else "inline",
     )
+
+
+# -- metadata + export (phase 4) ----------------------------------------------------------
+def _clip_or_404(request: Request, clip_id: int) -> Clip:
+    clip = _db(request).get_clip(clip_id)
+    if not clip:
+        raise HTTPException(404, "clip not found")
+    return clip
+
+
+def _current_metadata(request: Request, clip: Clip) -> Metadata:
+    """Stored text, else the no-LLM defaults (clip title, creator + game + fixed hashtags)."""
+    cfg = request.app.state.cfg
+    meta = _db(request).get_metadata(clip.id) or metadata_mod.default_metadata(cfg, clip)
+    meta.llm_enabled = cfg.llm_enabled
+    return meta
+
+
+@router.get("/clips/{clip_id}/metadata")
+def get_metadata(request: Request, clip_id: int) -> Metadata:
+    return _current_metadata(request, _clip_or_404(request, clip_id))
+
+
+@router.post("/clips/{clip_id}/metadata/generate")
+def generate_metadata(request: Request, clip_id: int) -> Metadata:
+    """Ask the LLM for title, caption and hashtags. Replaces earlier text (manual edits too),
+    so the UI confirms before calling this when metadata already exists."""
+    clip = _clip_or_404(request, clip_id)
+    cfg = request.app.state.cfg
+    if not cfg.llm_enabled:
+        raise HTTPException(409, "LLM metadata is disabled (set LLM_ENABLED=true)")
+    if clip.status in ("queued", "running"):
+        raise HTTPException(409, f"clip is {clip.status}, wait for the pipeline")
+    try:
+        meta = metadata_mod.generate(cfg, clip, request.app.state.llm)
+    except metadata_mod.MetadataError as e:
+        raise HTTPException(502, str(e)) from e
+    _db(request).set_metadata(clip_id, meta.title, meta.caption, meta.hashtags, "llm")
+    return _current_metadata(request, clip)
+
+
+@router.put("/clips/{clip_id}/metadata")
+def update_metadata(request: Request, clip_id: int, body: MetadataUpdate) -> Metadata:
+    clip = _clip_or_404(request, clip_id)
+    db = _db(request)
+    cfg = request.app.state.cfg
+    cur = _current_metadata(request, clip)
+    tags = cur.hashtags
+    if body.hashtags is not None:
+        tags = metadata_mod.merge_hashtags([], body.hashtags, cfg.max_hashtags)
+    db.set_metadata(
+        clip_id,
+        cur.title if body.title is None
+        else metadata_mod.clip_text(body.title, metadata_mod.TITLE_MAX),
+        cur.caption if body.caption is None
+        else metadata_mod.clip_text(body.caption, metadata_mod.CAPTION_MAX),
+        tags, "manual",
+    )
+    return _current_metadata(request, clip)
+
+
+@router.get("/clips/{clip_id}/export")
+def export_clip(request: Request, clip_id: int) -> dict:
+    """Copy-paste text per platform plus the MP4 download URL."""
+    clip = _with_output(request, _clip_or_404(request, clip_id))
+    meta = _current_metadata(request, clip)
+    return {
+        "video_url": clip.output_url,
+        "download_url": f"{clip.output_url}?download=1" if clip.output_url else None,
+        "metadata": meta,
+        "platforms": metadata_mod.export_text(clip, meta),
+    }
+
+
+@router.get("/clips/{clip_id}/publications")
+def list_publications(request: Request, clip_id: int) -> list[Publication]:
+    _clip_or_404(request, clip_id)
+    return _db(request).list_publications(clip_id)
+
+
+@router.post("/clips/{clip_id}/publications", status_code=201)
+def add_publication(request: Request, clip_id: int, body: PublicationCreate) -> Publication:
+    """'Mark as published': platform + URL, optionally feedback right away."""
+    clip = _clip_or_404(request, clip_id)
+    if clip.status != "done":
+        raise HTTPException(409, "clip has no finished render")
+    return _db(request).add_publication(
+        clip_id, body.platform, body.url, body.published_at, body.views_24h, body.rating,
+        body.note,
+    )
+
+
+@router.patch("/publications/{pub_id}")
+def update_publication(request: Request, pub_id: int, body: PublicationUpdate) -> Publication:
+    """Manual feedback: views at 24 h, rating, note."""
+    db = _db(request)
+    if not db.get_publication(pub_id):
+        raise HTTPException(404, "publication not found")
+    pub = db.update_publication(pub_id, **body.model_dump(exclude_unset=True))
+    assert pub
+    return pub
+
+
+@router.delete("/publications/{pub_id}", status_code=204)
+def delete_publication(request: Request, pub_id: int) -> Response:
+    if not _db(request).delete_publication(pub_id):
+        raise HTTPException(404, "publication not found")
+    return Response(status_code=204)
+
+
+@router.get("/report/ratings")
+def rating_report(request: Request) -> list[dict]:
+    """Channel x layout x rating counts from the manual feedback."""
+    return _db(request).rating_report()
 
 
 @router.post("/clips", status_code=201)
