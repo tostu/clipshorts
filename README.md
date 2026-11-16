@@ -58,7 +58,7 @@ Environment variables or `.env` (see `.env.example`):
 | `DATA_DIR` | `./data` (`/data` in the image) | Clips, artifacts and the SQLite DB |
 | `AUTH_TOKEN` | empty | Optional bearer token; empty = no auth |
 | `LANGUAGES` | `de,en` | Caption languages; auto-detect is clamped to this set |
-| `WHISPER_MODEL` | `small` | faster-whisper model (`base`, `small`, `medium`, ...) |
+| `WHISPER_MODEL` | `large-v3-turbo` | faster-whisper model (`base`, `small`, `medium`, ...) |
 | `WHISPER_COMPUTE_TYPE` | `int8` | CTranslate2 compute type |
 | `YUNET_MODEL` | vendored | Path to a YuNet ONNX model |
 | `LAYOUT_OVERRIDES` | `{}` | JSON of classifier thresholds (see `LayoutParams` in `clipshorts/layout.py`) |

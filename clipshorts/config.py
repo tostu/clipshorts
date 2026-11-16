@@ -19,7 +19,7 @@ class Config(BaseSettings):
     # Comma-separated caption languages; auto-detect is clamped to these
     languages: str = "de,en"
 
-    whisper_model: str = "small"
+    whisper_model: str = "large-v3-turbo"
     whisper_compute_type: str = "int8"
     # Model is unloaded after this many idle minutes (<= 0: right after each transcription)
     whisper_idle_minutes: float = 5.0

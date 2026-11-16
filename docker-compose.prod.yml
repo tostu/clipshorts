@@ -16,14 +16,17 @@ services:
       # Optional app token: open http://host:8000/?token=<value> or send a Bearer header.
       AUTH_TOKEN: ${AUTH_TOKEN:-}
       LANGUAGES: ${LANGUAGES:-de,en}
-      WHISPER_MODEL: ${WHISPER_MODEL:-small}
+      WHISPER_MODEL: ${WHISPER_MODEL:-large-v3-turbo}
       FPS_CAP: ${FPS_CAP:-30}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      VIDEO_ENCODER: ${VIDEO_ENCODER:-libx264}
     volumes:
-      - ./data:/data
+      - ${DATA_PATH:-./data}:/data
     # Optional Quick Sync (untested): mount the iGPU and set VIDEO_ENCODER=h264_qsv
-    # devices:
-    #   - /dev/dri:/dev/dri
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - "992"  # host `render` group (getent group render); needed for /dev/dri/renderD128
     ports:
       # Bind to the Tailscale IP (`tailscale ip -4`) or the LAN IP, never 0.0.0.0 on a public host.
       - "${BIND_ADDR:-127.0.0.1}:${PORT:-8000}:8000"

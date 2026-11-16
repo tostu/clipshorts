@@ -110,7 +110,7 @@ def test_lazy_load_and_whisper_arguments(tmp_path):
     tr, model, made = _tr(tmp_path)
     assert not tr.loaded and made == []  # nothing loaded at construction
     out = tr(tmp_path / "a.mp4", language=None, allowed=["de", "en"], prompt="Titel. Spiel: X")
-    assert made == [("small", "int8", None, 0)] and tr.loaded
+    assert made == [("large-v3-turbo", "int8", None, 0)] and tr.loaded
     assert out["language"] == "de" and out["language_source"] == "auto"  # nl clamped -> de
     assert out["duration"] == 2.0
     kw = model.calls[0]

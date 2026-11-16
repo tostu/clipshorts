@@ -4,7 +4,7 @@ from clipshorts.config import Config
 def test_defaults():
     c = Config(_env_file=None)
     assert c.language_list == ["de", "en"]
-    assert c.whisper_model == "small"
+    assert c.whisper_model == "large-v3-turbo"
     assert c.fps_cap == 30
     assert c.auth_token == ""
 
