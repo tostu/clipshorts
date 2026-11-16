@@ -190,3 +190,16 @@ def test_font_is_bundled_with_umlauts():
     font = ImageFont.truetype(str(path), 80)
     for ch in "äöüÄÖÜß":
         assert font.getmask(ch).getbbox() is not None, ch
+
+
+def test_expand_edited_deletes_and_splits():
+    from clipshorts.captions import expand_edited
+
+    out = expand_edited([
+        {"start": 0.0, "end": 1.0, "text": "Hallo"},
+        {"start": 1.0, "end": 2.0, "text": "  "},  # deleted
+        {"start": 2.0, "end": 4.0, "text": "zwei Worte"},  # split, time shared evenly
+    ])
+    assert [w["text"] for w in out] == ["Hallo", "zwei", "Worte"]
+    assert out[1] == {"start": 2.0, "end": 3.0, "text": "zwei"}
+    assert out[2] == {"start": 3.0, "end": 4.0, "text": "Worte"}

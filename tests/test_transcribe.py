@@ -6,7 +6,6 @@ import pytest
 from clipshorts.config import Config
 from clipshorts.transcribe import (
     WhisperTranscriber,
-    build_prompt,
     build_transcript,
     clamp_language,
     empty_transcript,
@@ -27,13 +26,6 @@ from clipshorts.transcribe import (
 ])
 def test_clamp_language(probs, allowed, detected, expected):
     assert clamp_language(probs, allowed, detected) == expected
-
-
-def test_build_prompt():
-    assert build_prompt("Krasser Move", "Tetris", "streamer") == (
-        "Krasser Move. Spiel: Tetris. Kanal: streamer")
-    assert build_prompt(None, " Tetris ", None) == "Spiel: Tetris"
-    assert build_prompt("", None, "") is None
 
 
 # -- transcript JSON -----------------------------------------------------------------------

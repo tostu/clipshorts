@@ -4,6 +4,7 @@ Words (with timestamps) -> chunks of at most N words that fit the frame width ->
 Dialogue event per word, showing the whole chunk with the active word highlighted.
 """
 
+import unicodedata
 from dataclasses import asdict, dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -132,16 +133,38 @@ def text_width(text: str, font_size: int, font_path: Path | None = None) -> floa
 
 
 # -- chunking --------------------------------------------------------------------------------
+def _is_symbol_only(text: str) -> bool:
+    """Emoji/symbol tokens (Whisper hallucinations like a lone sun); the font has no glyph."""
+    return not any(c.isalnum() for c in text) and any(
+        unicodedata.category(c).startswith("S") for c in text)
+
+
 def clean_words(raw: list[dict[str, Any]]) -> list[Word]:
     """Normalise transcript words: strip text, drop empties, enforce monotonic timing."""
     out: list[Word] = []
     for w in raw:
         text = str(w.get("word", w.get("text", ""))).strip().replace("\n", " ")
-        if not text:
+        if not text or _is_symbol_only(text):
             continue
         start = max(float(w["start"]), out[-1].end if out else 0.0)
         end = max(float(w["end"]), start + 0.05)
         out.append(Word(round(start, 3), round(end, 3), text))
+    return out
+
+
+def expand_edited(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Normalise hand-edited words: empty text deletes a word, text with spaces is split into
+    several words that share the original time span evenly. Result is {start, end, text}."""
+    out: list[dict[str, Any]] = []
+    for it in items:
+        parts = str(it.get("text", "")).split()
+        if not parts:
+            continue
+        start, end = float(it["start"]), float(it["end"])
+        step = (end - start) / len(parts)
+        for i, p in enumerate(parts):
+            out.append({"start": round(start + i * step, 3),
+                        "end": round(start + (i + 1) * step, 3), "text": p})
     return out
 
 

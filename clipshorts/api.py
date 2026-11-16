@@ -9,9 +9,12 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse
 
 from . import metadata as metadata_mod
+from .captions import clean_words, expand_edited
 from .db import DB
 from .events import EventBus
 from .models import (
+    CaptionsOut,
+    CaptionsUpdate,
     Clip,
     ClipCreate,
     Metadata,
@@ -21,7 +24,13 @@ from .models import (
     PublicationUpdate,
     RerenderBody,
 )
-from .pipeline import OUTPUT_FILE, TRANSCRIPT_FILE
+from .pipeline import (
+    CAPTIONS_EDIT_FILE,
+    OUTPUT_FILE,
+    TRANSCRIPT_FILE,
+    _edit_words,
+    _read_json,
+)
 from .twitch import ClipUrlError, parse_clip_url
 from .worker import Worker
 
@@ -119,14 +128,65 @@ def rerender(request: Request, clip_id: int, body: RerenderBody | None = None) -
         raise HTTPException(404, "clip not found")
     if clip.status in ("queued", "running"):
         raise HTTPException(409, f"clip is already {clip.status}")
-    fields: dict = {"status": "queued", "error": None}
+    fields: dict = {}
     if body is not None and body.layout is not None:
         fields["layout_override"] = None if body.layout == "auto" else body.layout
-    clip = db.update_clip(clip_id, **fields)
+    return _with_output(request, _requeue(request, clip_id, **fields))
+
+
+def _requeue(request: Request, clip_id: int, **fields) -> Clip:
+    db = _db(request)
+    clip = db.update_clip(clip_id, status="queued", error=None, **fields)
     db.enqueue_job("pipeline", clip_id)
     request.app.state.bus.publish("clip", clip.model_dump())
     _poke(request)
-    return _with_output(request, clip)
+    return clip
+
+
+# -- caption text edits --------------------------------------------------------------------
+def _idle_clip(request: Request, clip_id: int) -> Clip:
+    clip = _clip_or_404(request, clip_id)
+    if clip.status in ("queued", "running"):
+        raise HTTPException(409, f"clip is already {clip.status}")
+    return clip
+
+
+@router.get("/clips/{clip_id}/captions")
+def get_captions(request: Request, clip_id: int) -> CaptionsOut:
+    """Words shown as captions: the hand-edited list if there is one, else the transcript."""
+    _clip_or_404(request, clip_id)
+    d = request.app.state.cfg.clip_dir(clip_id)
+    edit = _edit_words(d)
+    if edit is not None:
+        return CaptionsOut(words=edit, edited=True)
+    words = clean_words(_read_json(d / TRANSCRIPT_FILE).get("words", []))
+    return CaptionsOut(words=[{"start": w.start, "end": w.end, "text": w.text} for w in words],
+                       edited=False)
+
+
+@router.put("/clips/{clip_id}/captions")
+def update_captions(request: Request, clip_id: int, body: CaptionsUpdate) -> Clip:
+    """Save hand-edited caption words and re-run captions + render (nothing else)."""
+    _idle_clip(request, clip_id)
+    d = request.app.state.cfg.clip_dir(clip_id)
+    if not (d / TRANSCRIPT_FILE).is_file():
+        raise HTTPException(409, "no transcript yet")
+    items = [w.model_dump() for w in body.words]
+    if any(w["end"] < w["start"] for w in items):
+        raise HTTPException(422, "word end before start")
+    words = expand_edited(items)
+    tmp = d / (CAPTIONS_EDIT_FILE + ".tmp")
+    tmp.write_text(json.dumps({"words": words}, indent=2, ensure_ascii=False))
+    tmp.replace(d / CAPTIONS_EDIT_FILE)
+    return _with_output(request, _requeue(request, clip_id))
+
+
+@router.delete("/clips/{clip_id}/captions")
+def reset_captions(request: Request, clip_id: int) -> Clip:
+    """Drop hand edits, back to the Whisper text, and re-render."""
+    _idle_clip(request, clip_id)
+    (request.app.state.cfg.clip_dir(clip_id) / CAPTIONS_EDIT_FILE).unlink(missing_ok=True)
+    return _with_output(request, _requeue(request, clip_id))
 
 
 @router.get("/clips/{clip_id}/output")

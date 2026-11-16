@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 Status = Literal["queued", "running", "done", "failed", "waiting"]
 Language = Literal["auto", "de", "en"]
@@ -39,6 +39,21 @@ class ClipCreate(BaseModel):
 
 class RerenderBody(BaseModel):
     layout: LayoutChoice | None = None  # None = keep the current layout choice
+
+
+class CaptionWord(BaseModel):
+    start: float = Field(ge=0)
+    end: float = Field(ge=0)
+    text: str = Field(max_length=200)
+
+
+class CaptionsUpdate(BaseModel):
+    words: list[CaptionWord] = Field(max_length=3000)
+
+
+class CaptionsOut(BaseModel):
+    words: list[CaptionWord]
+    edited: bool  # True when hand edits replace the Whisper transcript
 
 
 Platform = Literal["tiktok", "youtube", "instagram", "other"]

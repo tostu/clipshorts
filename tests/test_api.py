@@ -184,3 +184,69 @@ def test_auth_token(tmp_path):
         assert c.get("/api/clips", headers={"Authorization": "Bearer nope"}).status_code == 401
         assert c.get("/api/clips", headers={"Authorization": "Bearer tok"}).status_code == 200
         assert c.get("/api/clips?token=tok").status_code == 200
+
+
+def _write_transcript(cfg, cid, words):
+    import json
+
+    d = cfg.clip_dir(cid)
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "transcript.json").write_text(json.dumps({"language": "de", "words": words}))
+
+
+def test_captions_edit_roundtrip(client, cfg):
+    cid = _done_clip(client, cfg)
+    _write_transcript(cfg, cid, [{"word": "ENOCHE", "start": 0.0, "end": 1.0},
+                                 {"word": "geil", "start": 1.0, "end": 2.0}])
+    got = client.get(f"/api/clips/{cid}/captions").json()
+    assert got["edited"] is False and [w["text"] for w in got["words"]] == ["ENOCHE", "geil"]
+
+    words = [{"start": 0.0, "end": 1.0, "text": "Enoch"}, {"start": 1.0, "end": 2.0, "text": ""}]
+    r = client.put(f"/api/clips/{cid}/captions", json={"words": words})
+    assert r.status_code == 200 and r.json()["status"] == "queued"
+    got = client.get(f"/api/clips/{cid}/captions").json()
+    assert got["edited"] is True and [w["text"] for w in got["words"]] == ["Enoch"]
+    assert client.put(f"/api/clips/{cid}/captions", json={"words": words}).status_code == 409
+
+    client.app.state.db.update_clip(cid, status="done")
+    r = client.delete(f"/api/clips/{cid}/captions")
+    assert r.status_code == 200 and r.json()["status"] == "queued"
+    assert client.get(f"/api/clips/{cid}/captions").json()["edited"] is False
+
+
+def test_captions_edit_validation(client, cfg):
+    assert client.get("/api/clips/99/captions").status_code == 404
+    cid = _done_clip(client, cfg)
+    ok = {"words": [{"start": 0, "end": 1, "text": "x"}]}
+    assert client.put(f"/api/clips/{cid}/captions", json=ok).status_code == 409  # no transcript
+    _write_transcript(cfg, cid, [])
+    bad = {"words": [{"start": 2, "end": 1, "text": "x"}]}
+    assert client.put(f"/api/clips/{cid}/captions", json=bad).status_code == 422
+
+
+def test_captions_edit_end_to_end_reruns_captions_and_render_only(tmp_path, fake_tools):
+    import time
+
+    cfg2 = Config(data_dir=tmp_path / "d", worker_enabled=True, nice_level=0, _env_file=None)
+    with TestClient(create_app(cfg2, fake_tools.as_tools())) as c:
+        cid = c.post("/api/clips", json={"url": URL}).json()["id"]
+
+        def wait_done():
+            for _ in range(200):
+                body = c.get(f"/api/clips/{cid}").json()
+                if body["status"] in ("done", "failed"):
+                    return body
+                time.sleep(0.05)
+            raise AssertionError("worker did not finish")
+
+        assert wait_done()["status"] == "done"
+        words = c.get(f"/api/clips/{cid}/captions").json()["words"]
+        words[0]["text"] = "Korrigiert"
+        c.put(f"/api/clips/{cid}/captions", json={"words": words})
+        assert wait_done()["status"] == "done"
+        ass = (cfg2.clip_dir(cid) / "captions.ass").read_text(encoding="utf-8")
+        assert "Korrigiert" in ass
+        assert len(fake_tools.renders) == 2 and len(fake_tools.transcriptions) == 1
+        c.delete(f"/api/clips/{cid}/captions")
+        assert wait_done()["status"] == "done"
+        assert "Korrigiert" not in (cfg2.clip_dir(cid) / "captions.ass").read_text("utf-8")

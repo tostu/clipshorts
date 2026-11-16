@@ -78,11 +78,64 @@ function buildCard(id) {
     onclick: () => rerender(id, null) });
   const del = el("button", { class: "danger", textContent: "Delete", onclick: () => remove(id) });
   const actions = el("div", { class: "actions" }, layoutLabel, download, retry, del);
+  const captions = buildCaptions(id, error);
   const post = buildPost(id, error);
-  const body = el("div", {}, title, meta, badges, stages, bar, error, actions, post.root);
+  const body = el("div", {}, title, meta, badges, stages, bar, error, actions, captions.root,
+    post.root);
   const root = el("article", { class: "card clip" }, preview, body);
   return { root, video, placeholder, preview, title, meta, badges, stages, bar, error, select,
-    download, retry, del, post, videoSrc: "" };
+    download, retry, del, captions, post, videoSrc: "" };
+}
+
+// -- caption text: edit words by hand, then re-render ----------------------------------------
+function buildCaptions(id, errorEl) {
+  const fail = (e) => { errorEl.hidden = false; errorEl.textContent = String(e.message || e); };
+  const grid = el("div", { class: "words" });
+  const note = el("p", { class: "muted" });
+  let words = []; // [{start, end, text}] as loaded; the inputs hold the edits
+
+  const input = (w) => {
+    const i = el("input", { type: "text", value: w.text, title: w.start.toFixed(2) + " s",
+      size: Math.max(2, w.text.length) });
+    i.addEventListener("input", () => { i.size = Math.max(2, i.value.length); });
+    return i;
+  };
+
+  function show(res) {
+    words = res.words;
+    grid.replaceChildren(...words.map(input));
+    note.textContent = res.edited
+      ? "edited by hand" : "Whisper text. Empty = remove word, a space splits a word in two.";
+    reset.hidden = !res.edited;
+  }
+
+  const collect = () => words.map((w, i) => ({ ...w, text: grid.children[i].value }));
+
+  const save = el("button", { textContent: "Save and re-render", onclick: async () => {
+    errorEl.hidden = true;
+    try {
+      upsert(await api(`/api/clips/${id}/captions`, { method: "PUT", body: { words: collect() } }));
+      show(await api(`/api/clips/${id}/captions`));
+    } catch (e) { fail(e); }
+  } });
+  const reset = el("button", { class: "secondary", textContent: "Reset to Whisper text",
+    hidden: true, onclick: async () => {
+      errorEl.hidden = true;
+      try {
+        upsert(await api(`/api/clips/${id}/captions`, { method: "DELETE" }));
+        show(await api(`/api/clips/${id}/captions`));
+      } catch (e) { fail(e); }
+    } });
+
+  const root = el("details", { class: "post" },
+    el("summary", {}, "Caption text"), grid, note,
+    el("div", { class: "actions" }, save, reset));
+  root.addEventListener("toggle", async () => {
+    if (!root.open || root.dataset.loaded) return;
+    root.dataset.loaded = "1";
+    try { show(await api(`/api/clips/${id}/captions`)); } catch (e) { fail(e); }
+  });
+  return { root, save, reset };
 }
 
 // -- post: metadata, export, publications (phase 4) -------------------------------------
@@ -260,6 +313,9 @@ function updateCard(c) {
   card.retry.hidden = c.status !== "failed";
   card.del.disabled = active;
   card.post.root.hidden = c.status !== "done";
+  card.captions.root.hidden = c.status !== "done";
+  card.captions.save.disabled = active;
+  card.captions.reset.disabled = active;
 
   // video: swap src only when the file changed (updated_at moves on every re-render)
   if (c.output_url) {

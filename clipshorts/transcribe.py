@@ -42,18 +42,6 @@ def clamp_language(probs: Iterable[tuple[str, float]], allowed: list[str],
     return allowed[0]
 
 
-def build_prompt(title: str | None, game: str | None, channel: str | None) -> str | None:
-    """initial_prompt from free Twitch context. None when there is nothing to say."""
-    parts = []
-    if title:
-        parts.append(title.strip())
-    if game:
-        parts.append(f"Spiel: {game.strip()}")
-    if channel:
-        parts.append(f"Kanal: {channel.strip()}")
-    return ". ".join(p for p in parts if p) or None
-
-
 def empty_transcript(language: str | None, source: str = "none") -> dict[str, Any]:
     return {"version": TRANSCRIPT_VERSION, "language": language or "",
             "language_source": source, "language_probability": None, "duration": 0.0,

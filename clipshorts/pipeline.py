@@ -36,7 +36,7 @@ from .layout import (
 from .media import Cancelled, MediaError, Tools
 from .models import Clip
 from .render import RenderOptions, build_command, plan_render, render_timeout
-from .transcribe import WHISPER_SETTINGS, build_prompt, empty_transcript
+from .transcribe import WHISPER_SETTINGS, empty_transcript
 
 log = logging.getLogger(__name__)
 
@@ -266,6 +266,7 @@ def _layout(ctx: StageContext) -> None:
 # -- transcribe + captions (M3) ----------------------------------------------------------
 TRANSCRIPT_FILE = "transcript.json"
 CAPTIONS_FILE = "captions.ass"
+CAPTIONS_EDIT_FILE = "captions_edit.json"
 
 
 def _manual_language(clip: Clip) -> str | None:
@@ -279,7 +280,6 @@ def _transcribe_params(clip: Clip, cfg: Config) -> dict[str, Any]:
         "allowed": cfg.language_list,
         "model": cfg.whisper_model,
         "compute": cfg.whisper_compute_type,
-        "prompt": build_prompt(clip.title, clip.game, clip.channel),
         "whisper": WHISPER_SETTINGS,
     }
 
@@ -293,26 +293,38 @@ def _transcribe(ctx: StageContext) -> None:
     else:
         data = ctx.tools.transcribe(
             d / "source.mp4", cfg=ctx.cfg, language=language, allowed=ctx.cfg.language_list,
-            prompt=build_prompt(ctx.clip.title, ctx.clip.game, ctx.clip.channel),
+            prompt=None,  # title/game/channel make Whisper echo them on silence
             on_progress=ctx.progress,
         )
     tmp = d / (TRANSCRIPT_FILE + ".tmp")
     tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False))
     tmp.replace(d / TRANSCRIPT_FILE)
+    (d / CAPTIONS_EDIT_FILE).unlink(missing_ok=True)  # edits belonged to the old transcript
 
 
 def _caption_style(cfg: Config) -> CaptionStyle:
     return CaptionStyle(font_size=cfg.caption_font_size, max_words=cfg.caption_max_words)
 
 
+def _edit_words(clip_dir: Path) -> list[dict[str, Any]] | None:
+    """Hand-edited caption words (captions_edit.json), or None to use the Whisper words."""
+    words = _read_json(clip_dir / CAPTIONS_EDIT_FILE).get("words")
+    return words if isinstance(words, list) else None
+
+
 def _captions_params(clip: Clip, cfg: Config) -> dict[str, Any]:
     font = cfg.fonts_dir / FONT_FILE
+    edit = _edit_words(cfg.clip_dir(clip.id))
     return {"style": _caption_style(cfg).as_dict(), "font": FONT_FILE,
-            "font_bytes": font.stat().st_size if font.is_file() else None}
+            "font_bytes": font.stat().st_size if font.is_file() else None,
+            "edit": None if edit is None else params_hash("edit", {"words": edit})}
 
 
 def _captions(ctx: StageContext) -> None:
     transcript = _read_json(ctx.dir / TRANSCRIPT_FILE)
+    edit = _edit_words(ctx.dir)
+    if edit is not None:
+        transcript = {**transcript, "words": edit}
     ass, _ = captions_from_transcript(transcript, _caption_style(ctx.cfg),
                                       ctx.cfg.fonts_dir / FONT_FILE)
     tmp = ctx.dir / (CAPTIONS_FILE + ".tmp")

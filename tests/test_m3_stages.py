@@ -28,8 +28,7 @@ def test_transcribe_and_captions_write_artifacts(cfg, db, bus, fake_tools):
     call = fake_tools.transcriptions[0]
     assert call["audio"].endswith("source.mp4") and call["language"] is None
     assert call["allowed"] == ["de", "en"]
-    # prompt = Twitch title, game, channel (filled in by the download/probe stages)
-    assert call["prompt"] == "Big Play. Spiel: Tetris. Kanal: somestreamer"
+    assert call["prompt"] is None  # Twitch metadata must not leak into Whisper
     state = load_state(d)
     assert "seconds" in state["transcribe"] and "seconds" in state["captions"]
 

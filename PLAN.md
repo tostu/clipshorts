@@ -124,7 +124,7 @@ Output 1080x1920, H.264 `yuv420p`, AAC 160k, `+faststart`.
 
 - faster-whisper `small`, `int8`, `vad_filter=True`, `word_timestamps=True`, `condition_on_previous_text=False`.
 - Language: detect, then clamp to the configured set (`de`, `en`) to avoid false detections. Manual choice overrides.
-- `initial_prompt`: clip title, game and channel name from the Twitch metadata (free context).
+- No `initial_prompt`: Twitch title/game/channel made Whisper echo them (emoji included) on silence.
 - Chunking: max 3 words per caption, and **rendered pixel width** at most ~80% of the frame width (German compounds). Break at sentence ends (German abbreviations and ordinals handled, ported from shorts-flow) and at pauses over 0.5s.
 - Never split a word across lines. If a line is too wide, reduce the font size.
 - ASS style: bold, thick outline, active word highlighted (per-word events), placed in the TikTok safe zone (about 60-65% down the frame, extra right margin).
