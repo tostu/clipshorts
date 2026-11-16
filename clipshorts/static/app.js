@@ -291,6 +291,9 @@ function updateCard(c) {
   }
   const lang = c.detected_language || (c.language !== "auto" ? c.language : null);
   if (lang) card.badges.append(badge("language: " + lang));
+  if (c.status === "done" && c.review_status && c.review_status !== "pending") {
+    card.badges.append(badge(c.review_status, c.review_status === "approved" ? "ok" : "bad"));
+  }
 
   // stage chips: done before the current stage, active on it
   const cur = STAGES.indexOf(c.stage);
@@ -339,12 +342,14 @@ function removeCard(id) {
   const card = cards.get(id);
   if (card) { card.root.remove(); cards.delete(id); }
   $("empty").hidden = clips.size > 0;
+  renderInbox();
 }
 
 // -- actions ---------------------------------------------------------------------
 function upsert(clip) {
   clips.set(clip.id, clip);
   updateCard(clip);
+  renderInbox();
 }
 
 async function rerender(id, layout) {
@@ -380,6 +385,218 @@ async function loadClips() {
   // list is newest first; prepend() in reverse so the order matches
   [...list].reverse().forEach(upsert);
   $("empty").hidden = clips.size > 0;
+}
+
+// -- review inbox ---------------------------------------------------------------------------
+const inboxCards = new Map(); // id -> {root, video, ...}
+let inboxCurrent = null; // id of the highlighted card
+let lastDecision = null; // id of the clip decided last (for undo)
+let inboxSig = ""; // what the inbox DOM currently shows
+let view = "clips";
+
+const isPending = (c) => c.status === "done" && c.review_status === "pending" && !!c.output_url;
+const inboxIds = () => [...clips.values()].filter(isPending).sort((a, b) => b.id - a.id)
+  .map((c) => c.id);
+
+function buildInboxCard(c) {
+  const video = el("video", { controls: true, preload: "metadata", playsInline: true, loop: true });
+  const info = el("div", { class: "meta" });
+  const badges = el("div", { class: "badges" });
+  const err = el("p", { class: "error", hidden: true });
+  const approve = el("button", { class: "approve", textContent: "Approve (A)",
+    onclick: () => decide(c.id, "approve") });
+  const reject = el("button", { class: "reject", textContent: "Reject (R)",
+    onclick: () => decide(c.id, "reject") });
+  const root = el("article", { class: "card inbox-card", onclick: () => setCurrent(c.id, false) },
+    el("div", { class: "preview" }, video),
+    el("div", {}, el("div", { class: "title" }), info, badges, err,
+      el("div", { class: "actions" }, approve, reject)));
+  return { root, video, title: root.querySelector(".title"), info, badges, err, approve, reject,
+    src: "" };
+}
+
+function updateInboxCard(c) {
+  let card = inboxCards.get(c.id);
+  if (!card) { card = buildInboxCard(c); inboxCards.set(c.id, card); }
+  card.title.textContent = c.title || c.slug;
+  const lang = c.detected_language || (c.language !== "auto" ? c.language : null);
+  card.info.textContent = [c.channel, c.game, c.duration_s ? c.duration_s.toFixed(0) + " s" : null]
+    .filter(Boolean).join(" · ");
+  card.badges.replaceChildren(
+    ...[c.layout_type ? "layout: " + c.layout_type : null, lang ? "language: " + lang : null]
+      .filter(Boolean).map((t) => badge(t)));
+  const src = withToken(c.output_url + "?v=" + encodeURIComponent(c.updated_at));
+  if (card.src !== src) { card.src = src; card.video.src = src; }
+  return card;
+}
+
+function renderInbox() {
+  const ids = inboxIds();
+  const n = ids.length;
+  $("inbox-count").textContent = n;
+  $("inbox-count").hidden = n === 0;
+  $("inbox-empty").hidden = n > 0;
+  for (const [id, card] of [...inboxCards]) {
+    if (!ids.includes(id)) { card.video.pause(); card.root.remove(); inboxCards.delete(id); }
+  }
+  if (view !== "inbox") { inboxSig = ""; return; } // only build players while the tab is open
+  // progress events of other clips fire constantly; re-attaching a <video> would stop playback
+  const sig = ids.map((id) => id + ":" + clips.get(id).updated_at).join(",");
+  if (sig === inboxSig) { highlightInbox(false); return; }
+  inboxSig = sig;
+  const order = ids.map((id) => updateInboxCard(clips.get(id)).root);
+  $("inbox").replaceChildren(...order);
+  if (!ids.includes(inboxCurrent)) inboxCurrent = ids[0] ?? null;
+  highlightInbox(false);
+}
+
+function highlightInbox(scroll) {
+  for (const [id, card] of inboxCards) card.root.classList.toggle("current", id === inboxCurrent);
+  const cur = inboxCards.get(inboxCurrent);
+  if (cur && scroll) cur.root.scrollIntoView({ block: "center", behavior: "smooth" });
+}
+
+function setCurrent(id, scroll = true) {
+  if (id === inboxCurrent) return;
+  const prev = inboxCards.get(inboxCurrent);
+  if (prev) prev.video.pause();
+  inboxCurrent = id;
+  highlightInbox(scroll);
+}
+
+function moveCurrent(step) {
+  const ids = inboxIds();
+  if (!ids.length) return;
+  const i = ids.indexOf(inboxCurrent);
+  setCurrent(ids[Math.min(ids.length - 1, Math.max(0, i + step))]);
+}
+
+async function decide(id, action) {
+  const card = inboxCards.get(id);
+  const ids = inboxIds();
+  const i = ids.indexOf(id);
+  const next = ids[i + 1] ?? ids[i - 1] ?? null; // advance, or step back from the last card
+  const wasCurrent = inboxCurrent === id;
+  // move first: the SSE event can re-render the inbox before the response arrives and would
+  // otherwise reset the selection to the first card
+  if (wasCurrent) inboxCurrent = next;
+  try {
+    const clip = await api(`/api/clips/${id}/${action}`, { method: "POST" });
+    if (card) card.video.pause();
+    lastDecision = id;
+    upsert(clip);
+    highlightInbox(true);
+  } catch (e) {
+    if (wasCurrent) inboxCurrent = id;
+    if (card) { card.err.hidden = false; card.err.textContent = String(e.message || e); }
+  }
+}
+
+async function undoDecision() {
+  if (lastDecision === null) return;
+  const id = lastDecision;
+  lastDecision = null;
+  try {
+    inboxCurrent = id;
+    upsert(await api(`/api/clips/${id}/review/reset`, { method: "POST" }));
+    highlightInbox(true);
+  } catch { /* clip may be gone */ }
+}
+
+function toggleCurrentPlayback() {
+  const card = inboxCards.get(inboxCurrent);
+  if (!card) return;
+  if (card.video.paused) card.video.play().catch(() => {}); else card.video.pause();
+}
+
+function showView(name) {
+  view = name;
+  $("view-clips").hidden = name !== "clips";
+  $("view-inbox").hidden = name !== "inbox";
+  for (const b of document.querySelectorAll(".tab")) {
+    b.classList.toggle("active", b.dataset.view === name);
+  }
+  if (name !== "inbox") for (const card of inboxCards.values()) card.video.pause();
+  renderInbox();
+  if (name === "inbox") highlightInbox(false);
+}
+
+for (const b of document.querySelectorAll(".tab")) {
+  b.addEventListener("click", () => showView(b.dataset.view));
+}
+
+document.addEventListener("keydown", (e) => {
+  if (view !== "inbox" || e.ctrlKey || e.metaKey || e.altKey) return;
+  const t = e.target;
+  if (t instanceof HTMLElement && (t.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(t.tagName))) return;
+  const k = e.key.toLowerCase();
+  let handled = true;
+  if (k === "a") { if (inboxCurrent !== null) decide(inboxCurrent, "approve"); }
+  else if (k === "r") { if (inboxCurrent !== null) decide(inboxCurrent, "reject"); }
+  else if (k === "j" || k === "arrowdown" || k === "arrowright") moveCurrent(1);
+  else if (k === "k" || k === "arrowup" || k === "arrowleft") moveCurrent(-1);
+  else if (k === " ") toggleCurrentPlayback();
+  else if (k === "u") undoDecision();
+  else handled = false;
+  if (handled) e.preventDefault();
+});
+
+// -- followed channels (auto-sync) ------------------------------------------------------
+function ago(iso) {
+  if (!iso) return "never";
+  const s = Math.max(0, (Date.now() - Date.parse(iso)) / 1000);
+  if (s < 90) return "just now";
+  if (s < 5400) return Math.round(s / 60) + " min ago";
+  if (s < 129600) return Math.round(s / 3600) + " h ago";
+  return Math.round(s / 86400) + " d ago";
+}
+
+function channelRow(ch) {
+  const info = el("span", { class: "info" });
+  const showInfo = (c) => {
+    info.classList.toggle("bad", !!c.last_error);
+    info.textContent = c.last_error
+      ? "sync failed: " + c.last_error
+      : `synced ${ago(c.last_sync_at)} · ${c.total_queued} queued` +
+        (c.last_sync_at ? "" : " (first check pending)");
+  };
+  showInfo(ch);
+  const enabled = el("input", { type: "checkbox", checked: ch.enabled });
+  const min = el("input", { type: "number", min: 0, value: ch.min_views, title: "min views" });
+  const lang = el("select", {}, ...["auto", "de", "en"].map((l) =>
+    el("option", { value: l, textContent: l, selected: ch.language === l })));
+  const patch = async (body) => {
+    try { showInfo(await api(`/api/channels/${ch.id}`, { method: "PATCH", body })); }
+    catch (e) { info.classList.add("bad"); info.textContent = String(e.message || e); }
+  };
+  enabled.addEventListener("change", () => patch({ enabled: enabled.checked }));
+  min.addEventListener("change", () => patch({ min_views: Number(min.value) || 0 }));
+  lang.addEventListener("change", () => patch({ language: lang.value }));
+  const sync = el("button", { class: "secondary", textContent: "Check now", onclick: async () => {
+    sync.disabled = true;
+    try { showInfo(await api(`/api/channels/${ch.id}/sync`, { method: "POST" })); }
+    catch (e) { info.classList.add("bad"); info.textContent = String(e.message || e); }
+    finally { sync.disabled = false; }
+  } });
+  const rm = el("button", { class: "danger", textContent: "Unfollow", onclick: async () => {
+    if (!confirm(`Stop following ${ch.name}? Existing clips stay.`)) return;
+    try { await api(`/api/channels/${ch.id}`, { method: "DELETE" }); await loadChannels(); }
+    catch (e) { info.classList.add("bad"); info.textContent = String(e.message || e); }
+  } });
+  return el("div", { class: "channel" },
+    el("span", { class: "name", textContent: ch.name }),
+    el("label", {}, enabled, "auto"),
+    el("label", {}, "min views", min), lang, sync, rm, info);
+}
+
+async function loadChannels() {
+  const list = await api("/api/channels");
+  const box = $("channels");
+  box.replaceChildren(...(list.length
+    ? list.map(channelRow)
+    : [el("p", { class: "muted", textContent: "No channels followed yet." })]));
+  const active = list.filter((c) => c.enabled).length;
+  $("channels-count").textContent = list.length ? `(${active} of ${list.length} active)` : "";
 }
 
 // -- live updates (SSE) -------------------------------------------------------------
@@ -438,6 +655,7 @@ $("token-form").addEventListener("submit", (e) => {
   setToken($("token").value.trim());
   $("token-form").hidden = true;
   loadClips().catch(() => {});
+  loadChannels().catch(() => {});
   connect();
 });
 
@@ -461,5 +679,31 @@ $("new-form").addEventListener("submit", async (e) => {
   }
 });
 
+$("channel-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const err = $("channel-error");
+  err.hidden = true;
+  try {
+    await api("/api/channels", { method: "POST", body: {
+      name: $("channel-name").value.trim(),
+      min_views: Number($("channel-min").value) || 0,
+      language: $("channel-language").value,
+    } });
+    $("channel-name").value = "";
+    await loadChannels();
+  } catch (ex) {
+    err.hidden = false;
+    err.textContent = String(ex.message || ex);
+  }
+});
+
+// keep "synced x ago" fresh, but never rebuild rows while the user is editing one
+setInterval(() => {
+  if ($("channels-box").open && !$("channels").contains(document.activeElement)) {
+    loadChannels().catch(() => {});
+  }
+}, 60000);
+
 loadClips().catch(() => {});
+loadChannels().catch(() => {});
 connect();

@@ -219,7 +219,7 @@ The gate runs after render and stores a `pass | warn | fail` JSON verdict on the
 
 Rules: pass can export; warn needs an acknowledgement; fail needs an explicit override with a logged reason. Auto-approve on all-green is a per-channel option, off by default.
 
-Review inbox: card feed of rendered shorts with approve / reject / edit, keyboard shortcuts, side-by-side original vs result. Caption timeline editor (port the clip editor's `SubtitleTimeline` and crop editor ideas) with partial re-render by stage.
+Review inbox: card feed of rendered shorts with approve / reject / edit, keyboard shortcuts, side-by-side original vs result. **Status (as built):** inbox tab, `clips.review_status` (pending | approved | rejected) + `reviewed_at`, `GET /api/inbox`, `POST /api/clips/{id}/approve|reject|review/reset`, keyboard shortcuts and undo; reject keeps the slug in `seen_clips` so sync never re-queues it. Not built: side-by-side original, quality gate, auto-approve. Caption timeline editor (port the clip editor's `SubtitleTimeline` and crop editor ideas) with partial re-render by stage.
 
 ### Phase 4: Metadata and export
 

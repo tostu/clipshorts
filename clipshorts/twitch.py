@@ -20,6 +20,28 @@ class ParsedClip:
     canonical_url: str
 
 
+def parse_channel(raw: str) -> str:
+    """A Twitch login ('Name', '@name') or a twitch.tv/<channel>[/...] URL -> lowercase login."""
+    if not isinstance(raw, str) or not raw.strip():
+        raise ClipUrlError("empty channel")
+    text = raw.strip().lstrip("@")
+    if "/" in text or "." in text:
+        if "://" not in text:
+            text = "https://" + text
+        try:
+            parts = urlsplit(text)
+            host = (parts.hostname or "").lower()
+        except ValueError as e:
+            raise ClipUrlError(f"invalid URL: {e}") from e
+        if host not in _TWITCH_HOSTS:
+            raise ClipUrlError("not a Twitch URL")
+        segs = [s for s in parts.path.split("/") if s]
+        text = segs[0] if segs else ""
+    if not _CHANNEL_RE.match(text):
+        raise ClipUrlError("invalid channel name")
+    return text.lower()
+
+
 def parse_clip_url(raw: str) -> ParsedClip:
     """Accepts clips.twitch.tv/<slug>, [www.|m.]twitch.tv/<channel>/clip/<slug>
     and [www.|m.]twitch.tv/clip/<slug>. Scheme is optional."""

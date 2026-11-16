@@ -10,7 +10,7 @@ import threading
 from datetime import UTC, datetime
 from pathlib import Path
 
-from .models import Clip, Job, Metadata, Publication
+from .models import Channel, Clip, Job, Metadata, Publication
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS clips (
@@ -29,6 +29,8 @@ CREATE TABLE IF NOT EXISTS clips (
     layout_type TEXT,
     layout_confidence REAL,
     layout_override TEXT,
+    review_status TEXT NOT NULL DEFAULT 'pending',
+    reviewed_at TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -61,6 +63,25 @@ CREATE TABLE IF NOT EXISTS publications (
     note TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_publications_clip ON publications(clip_id);
+CREATE TABLE IF NOT EXISTS channels (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    min_views INTEGER NOT NULL DEFAULT 0,
+    language TEXT NOT NULL DEFAULT 'auto',
+    baselined INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    last_sync_at TEXT,
+    last_error TEXT,
+    last_queued INTEGER NOT NULL DEFAULT 0,
+    total_queued INTEGER NOT NULL DEFAULT 0
+);
+-- every clip slug sync has handled (queued or baselined), so deleting a clip never re-queues it
+CREATE TABLE IF NOT EXISTS seen_clips (
+    slug TEXT PRIMARY KEY,
+    channel TEXT,
+    seen_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -97,7 +118,19 @@ class DB:
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA foreign_keys=ON")
             self._conn.executescript(SCHEMA)
+            self._migrate()
             self._conn.commit()
+
+    def _migrate(self) -> None:
+        """Add columns to tables created by older versions (existing rows become 'pending')."""
+        cols = {r["name"] for r in self._conn.execute("PRAGMA table_info(clips)")}
+        if "review_status" not in cols:
+            self._conn.execute(
+                "ALTER TABLE clips ADD COLUMN review_status TEXT NOT NULL DEFAULT 'pending'")
+        if "reviewed_at" not in cols:
+            self._conn.execute("ALTER TABLE clips ADD COLUMN reviewed_at TEXT")
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_clips_review ON clips(status, review_status)")
 
     def close(self) -> None:
         with self._lock:
@@ -162,6 +195,20 @@ class DB:
         else:
             rows = self._all("SELECT * FROM clips ORDER BY id DESC")
         return [Clip(**dict(r)) for r in rows]
+
+    def list_inbox(self) -> list[Clip]:
+        """Finished clips waiting for a review decision, newest first."""
+        rows = self._all(
+            "SELECT * FROM clips WHERE status='done' AND review_status='pending' "
+            "ORDER BY id DESC")
+        return [Clip(**dict(r)) for r in rows]
+
+    def set_review(self, clip_id: int, review_status: str) -> Clip | None:
+        """Record a review decision. Leaves updated_at alone (the UI keys the video on it)."""
+        reviewed_at = None if review_status == "pending" else now_iso()
+        self._exec("UPDATE clips SET review_status=?, reviewed_at=? WHERE id=?",
+                   (review_status, reviewed_at, clip_id))
+        return self.get_clip(clip_id)
 
     def update_clip(self, clip_id: int, **fields) -> Clip | None:
         sets, args = ["updated_at=?"], [now_iso()]
@@ -274,6 +321,78 @@ class DB:
             )
             row[r["rating"]] = r["n"]
         return list(table.values())
+
+    # -- channels (auto-sync) -------------------------------------------
+    @staticmethod
+    def _channel(r: sqlite3.Row) -> Channel:
+        d = dict(r)
+        d.pop("baselined", None)
+        d["enabled"] = bool(d["enabled"])
+        return Channel(**d)
+
+    def add_channel(self, name: str, min_views: int = 0, language: str = "auto") -> Channel:
+        """Insert (name is stored lowercase). Raises sqlite3.IntegrityError if it exists."""
+        cur = self._exec(
+            "INSERT INTO channels(name, min_views, language, created_at) VALUES (?, ?, ?, ?)",
+            (name.lower(), min_views, language, now_iso()),
+        )
+        ch = self.get_channel(cur.lastrowid)
+        assert ch
+        return ch
+
+    def get_channel(self, channel_id: int) -> Channel | None:
+        r = self._one("SELECT * FROM channels WHERE id=?", (channel_id,))
+        return self._channel(r) if r else None
+
+    def find_channel(self, name: str) -> Channel | None:
+        r = self._one("SELECT * FROM channels WHERE name=?", (name.lower(),))
+        return self._channel(r) if r else None
+
+    def list_channels(self, enabled_only: bool = False) -> list[Channel]:
+        where = " WHERE enabled=1" if enabled_only else ""
+        return [self._channel(r) for r in self._all(f"SELECT * FROM channels{where} ORDER BY name")]
+
+    def update_channel(self, channel_id: int, **fields) -> Channel | None:
+        allowed = {"enabled", "min_views", "language"}
+        sets, args = [], []
+        for k, v in fields.items():
+            if k not in allowed:
+                raise ValueError(k)
+            sets.append(f"{k}=?")
+            args.append(int(v) if k == "enabled" else v)
+        if sets:
+            self._exec(f"UPDATE channels SET {', '.join(sets)} WHERE id=?", (*args, channel_id))
+        return self.get_channel(channel_id)
+
+    def delete_channel(self, channel_id: int) -> bool:
+        return self._exec("DELETE FROM channels WHERE id=?", (channel_id,)).rowcount > 0
+
+    def channel_baselined(self, channel_id: int) -> bool:
+        r = self._one("SELECT baselined FROM channels WHERE id=?", (channel_id,))
+        return bool(r and r["baselined"])
+
+    def record_sync(self, channel_id: int, error: str | None, queued: int = 0) -> None:
+        """Result of one sync run. A failed run leaves `baselined` and the counters alone."""
+        if error is not None:
+            self._exec("UPDATE channels SET last_sync_at=?, last_error=? WHERE id=?",
+                       (now_iso(), error, channel_id))
+            return
+        self._exec(
+            "UPDATE channels SET last_sync_at=?, last_error=NULL, last_queued=?, "
+            "total_queued=total_queued+?, baselined=1 WHERE id=?",
+            (now_iso(), queued, queued, channel_id),
+        )
+
+    def mark_seen(self, slug: str, channel: str | None) -> None:
+        self._exec("INSERT OR IGNORE INTO seen_clips(slug, channel, seen_at) VALUES (?, ?, ?)",
+                   (slug, channel, now_iso()))
+
+    def seen_slugs(self, slugs: list[str]) -> set[str]:
+        if not slugs:
+            return set()
+        marks = ",".join("?" * len(slugs))
+        rows = self._all(f"SELECT slug FROM seen_clips WHERE slug IN ({marks})", tuple(slugs))
+        return {r["slug"] for r in rows}
 
     # -- jobs -----------------------------------------------------------
     @staticmethod

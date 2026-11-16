@@ -42,6 +42,9 @@ class FakeTools:
         self.fail_transcribe: str | None = None
         self.renders: list[dict] = []
         self.fail_render: str | None = None
+        self.listings: list[str] = []
+        self.fail_list: str | None = None
+        self.channel_clips: dict[str, list[dict]] = {}  # channel -> listing items
         self.transcript: dict = {
             "version": 1, "language": "de", "language_source": "auto",
             "segments": [],
@@ -117,10 +120,17 @@ class FakeTools:
             on_progress(1.0)
         out_path.write_bytes(b"fake-output")
 
+    def list_clips(self, channel, range_="24hr", limit=50):
+        self.listings.append(channel)
+        if self.fail_list:
+            raise MediaError(self.fail_list)
+        return [dict(c) for c in self.channel_clips.get(channel, [])]
+
     def as_tools(self) -> Tools:
         return Tools(download=self.download, probe=self.probe,
                      extract_frames=self.extract_frames, analyze_frames=self.analyze_frames,
-                     transcribe=self.transcribe, render=self.render)
+                     transcribe=self.transcribe, render=self.render,
+                     list_clips=self.list_clips)
 
 
 @pytest.fixture

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import Config
+from .twitch import ClipUrlError, parse_clip_url
 
 
 class MediaError(RuntimeError):
@@ -69,6 +70,35 @@ def ytdlp_download(
         "timestamp": info.get("timestamp"),
         "webpage_url": info.get("webpage_url"),
     }
+
+
+def ytdlp_list_clips(channel: str, range_: str = "24hr", limit: int = 50) -> list[dict[str, Any]]:
+    """Top clips of a channel for a time range (24hr | 7d | 30d | all), best views first.
+
+    Uses yt-dlp's flat Twitch clips listing (no API credentials). Each item:
+    slug, url, title, views, duration, timestamp."""
+    import yt_dlp
+
+    opts = {"extract_flat": True, "quiet": True, "no_warnings": True, "playlistend": limit,
+            "skip_download": True}
+    url = f"https://www.twitch.tv/{channel}/clips?filter=clips&range={range_}"
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+    except yt_dlp.utils.DownloadError as e:
+        raise MediaError(f"yt-dlp: {e}") from e
+    out: list[dict[str, Any]] = []
+    for e in (info or {}).get("entries") or []:
+        try:
+            slug = parse_clip_url(e.get("url") or "").slug
+        except ClipUrlError:
+            continue
+        out.append({
+            "slug": slug, "url": e.get("url"), "title": e.get("title"),
+            "views": e.get("view_count") or 0, "duration": e.get("duration"),
+            "timestamp": e.get("timestamp"),
+        })
+    return out
 
 
 def ffprobe(path: Path, ffprobe_bin: str = "ffprobe") -> dict[str, Any]:
@@ -195,6 +225,8 @@ class Tools:
     transcribe: Callable[..., dict[str, Any]] = transcribe_audio
     # (cmd, out_path, *, duration, timeout, on_progress, cancel, require_filters) -> None
     render: Callable[..., None] = render_video
+    # (channel, range_, limit) -> [{slug, url, title, views, duration, timestamp}], best first
+    list_clips: Callable[..., list[dict[str, Any]]] = ytdlp_list_clips
 
 
 def default_tools(cfg: Config) -> Tools:

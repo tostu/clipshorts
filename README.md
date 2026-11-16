@@ -68,6 +68,7 @@ Environment variables or `.env` (see `.env.example`):
 | `RENDER_SPLIT_RATIO` | `0.38` | Stacked layout: facecam share of output height |
 | `RENDER_TIMEOUT_FACTOR` / `RENDER_TIMEOUT_MIN_S` | `8` / `120` | Render timeout = factor x clip duration, at least the minimum |
 | `FIXED_HASHTAGS` / `MAX_HASHTAGS` | `twitchclips,twitch,gaming,fyp,deutsch,twitchde` / `10` | Hashtags are creator, `<creator>clips`, game + this set (no `#`), capped at the max |
+| `SYNC_ENABLED` / `SYNC_INTERVAL_MINUTES` / `SYNC_MAX_PER_CHANNEL` | `true` / `30` / `5` | Followed-channel auto-sync: poll interval, and clips queued per channel and run |
 | `NICE_LEVEL` | `10` | Worker niceness |
 | `LOG_LEVEL` | `INFO` | Log level |
 
@@ -93,7 +94,24 @@ POST   /api/clips/{id}/publications        {platform, url?, published_at?, views
 PATCH  /api/publications/{id}              {url?, views_24h?, rating?: good|ok|flop, note?}
 DELETE /api/publications/{id}
 GET    /api/report/ratings                 channel x layout x rating counts
+
+GET    /api/channels                       followed channels + last sync state
+POST   /api/channels                       {name (login or twitch.tv URL), min_views?, language?}
+PATCH  /api/channels/{id}                  {enabled?, min_views?, language?}
+DELETE /api/channels/{id}                  unfollow (existing clips stay)
+POST   /api/channels/{id}/sync             check for new clips now
+
+GET    /api/inbox                          finished shorts with review_status=pending, newest first:
+                                           {id, slug, title, channel, game, layout_type, language,
+                                           detected_language, duration_s, output_url, source_url, created_at}
+POST   /api/clips/{id}/approve             review_status=approved (409 unless the clip is done)
+POST   /api/clips/{id}/reject              review_status=rejected; the slug stays "seen", so sync never re-queues it
+POST   /api/clips/{id}/review/reset        back to pending (undo)
 ```
+
+**Followed channels.** The "Followed channels" panel in the UI picks channels whose new clips are queued automatically. Every `SYNC_INTERVAL_MINUTES` the server lists each channel's clips of the last 24 h through yt-dlp (no Twitch API credentials) and queues unseen ones like pasted URLs, best views first, at most `SYNC_MAX_PER_CHANNEL` per run. The first check of a new channel only marks the clips already up as seen, so following does not queue the last day. `min_views` holds a clip back until it reaches that view count (it is re-checked each run while it is in the 24 h window). A deleted or rejected clip is never queued again. Downtime longer than 24 h misses the clips in between.
+
+**Review inbox.** Every finished short starts as `pending` (existing clips are migrated to `pending` too). The "Inbox" tab shows the pending shorts as a card feed with an inline player and a pending count. Keys: `A` approve, `R` reject, `J`/`K` or arrow keys next/previous, `Space` play/pause, `U` undo the last decision; after a decision the next card is selected. Approved and rejected clips stay in the "Clips" list (with a badge), so approved ones remain available for export and publishing. There is no side-by-side view of the source clip.
 
 A clip's post text is its Twitch title plus hashtags `#<creator> #<creator>clips #<game> #twitchclips #twitch #gaming #fyp #deutsch #twitchde` (creator = the streamer from the Twitch metadata, not whoever clipped it; set `FIXED_HASHTAGS` to change the fixed part). No LLM involved. The UI shows this under "Post text and publishing" on every finished clip. Export is manual: download the MP4 and copy the caption. TikTok/YouTube/Instagram upload is not built.
 

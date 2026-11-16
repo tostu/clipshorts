@@ -44,6 +44,12 @@ class Config(BaseSettings):
     fixed_hashtags: str = "twitchclips,twitch,gaming,fyp,deutsch,twitchde"
     max_hashtags: int = 10
 
+    # Channel auto-sync: every interval, followed channels are polled (yt-dlp, no Twitch API
+    # credentials) for clips of the last 24 h; new ones are queued like pasted URLs.
+    sync_enabled: bool = True
+    sync_interval_minutes: float = 30.0
+    sync_max_per_channel: int = 5  # queued per channel and sync run (best views first)
+
     ffmpeg_bin: str = "ffmpeg"
     ffprobe_bin: str = "ffprobe"
     ytdlp_format: str = "best"

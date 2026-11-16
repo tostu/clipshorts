@@ -15,8 +15,12 @@ from .events import EventBus
 from .models import (
     CaptionsOut,
     CaptionsUpdate,
+    Channel,
+    ChannelCreate,
+    ChannelUpdate,
     Clip,
     ClipCreate,
+    InboxItem,
     Metadata,
     MetadataUpdate,
     Publication,
@@ -31,7 +35,8 @@ from .pipeline import (
     _edit_words,
     _read_json,
 )
-from .twitch import ClipUrlError, parse_clip_url
+from .sync import Syncer
+from .twitch import ClipUrlError, parse_channel, parse_clip_url
 from .worker import Worker
 
 router = APIRouter(prefix="/api")
@@ -189,6 +194,47 @@ def reset_captions(request: Request, clip_id: int) -> Clip:
     return _with_output(request, _requeue(request, clip_id))
 
 
+# -- review inbox -----------------------------------------------------------------------
+@router.get("/inbox")
+def inbox(request: Request) -> list[InboxItem]:
+    """Finished shorts still waiting for approve / reject, newest first."""
+    items = []
+    for c in _db(request).list_inbox():
+        c = _with_output(request, c)
+        items.append(InboxItem(**c.model_dump(include=set(InboxItem.model_fields))))
+    return items
+
+
+def _review(request: Request, clip_id: int, review_status: str) -> Clip:
+    db = _db(request)
+    clip = _clip_or_404(request, clip_id)
+    if clip.status != "done":
+        raise HTTPException(409, "clip has no finished render")
+    if review_status == "rejected":
+        # keep the slug recorded as seen: sync must never queue a rejected clip again
+        db.mark_seen(clip.slug, clip.channel)
+    updated = db.set_review(clip_id, review_status)
+    assert updated
+    request.app.state.bus.publish("clip", updated.model_dump())
+    return _with_output(request, updated)
+
+
+@router.post("/clips/{clip_id}/approve")
+def approve_clip(request: Request, clip_id: int) -> Clip:
+    return _review(request, clip_id, "approved")
+
+
+@router.post("/clips/{clip_id}/reject")
+def reject_clip(request: Request, clip_id: int) -> Clip:
+    return _review(request, clip_id, "rejected")
+
+
+@router.post("/clips/{clip_id}/review/reset")
+def reset_review(request: Request, clip_id: int) -> Clip:
+    """Back to pending (undo a decision)."""
+    return _review(request, clip_id, "pending")
+
+
 @router.get("/clips/{clip_id}/output")
 def get_output(request: Request, clip_id: int, download: bool = False):
     """The rendered MP4. Range requests are answered (preview seeking, resumable download)."""
@@ -296,6 +342,60 @@ def delete_publication(request: Request, pub_id: int) -> Response:
 def rating_report(request: Request) -> list[dict]:
     """Channel x layout x rating counts from the manual feedback."""
     return _db(request).rating_report()
+
+
+# -- followed channels (auto-sync) ---------------------------------------------------------
+def _channel_or_404(request: Request, channel_id: int) -> Channel:
+    ch = _db(request).get_channel(channel_id)
+    if not ch:
+        raise HTTPException(404, "channel not found")
+    return ch
+
+
+@router.get("/channels")
+def list_channels(request: Request) -> list[Channel]:
+    return _db(request).list_channels()
+
+
+@router.post("/channels", status_code=201)
+async def add_channel(request: Request, body: ChannelCreate) -> Channel:
+    """Follow a channel. Clips already up are baselined by the first sync, not queued."""
+    db = _db(request)
+    try:
+        name = parse_channel(body.name)
+    except ClipUrlError as e:
+        raise HTTPException(422, f"invalid channel: {e}") from e
+    if db.find_channel(name):
+        raise HTTPException(409, "channel already followed")
+    ch = db.add_channel(name, body.min_views, body.language)
+    syncer: Syncer | None = getattr(request.app.state, "syncer", None)
+    if syncer and request.app.state.cfg.sync_enabled and request.app.state.cfg.worker_enabled:
+        syncer.sync_in_background(ch.id)  # baseline right away, off the request
+    return ch
+
+
+@router.patch("/channels/{channel_id}")
+def update_channel(request: Request, channel_id: int, body: ChannelUpdate) -> Channel:
+    _channel_or_404(request, channel_id)
+    ch = _db(request).update_channel(channel_id, **body.model_dump(exclude_unset=True,
+                                                                    exclude_none=True))
+    assert ch
+    return ch
+
+
+@router.delete("/channels/{channel_id}", status_code=204)
+def delete_channel(request: Request, channel_id: int) -> Response:
+    if not _db(request).delete_channel(channel_id):
+        raise HTTPException(404, "channel not found")
+    return Response(status_code=204)
+
+
+@router.post("/channels/{channel_id}/sync")
+async def sync_channel_now(request: Request, channel_id: int) -> Channel:
+    """Check the channel for new clips right now (also works while auto-sync is off)."""
+    _channel_or_404(request, channel_id)
+    await request.app.state.syncer.sync_one(channel_id)
+    return _channel_or_404(request, channel_id)
 
 
 @router.post("/clips", status_code=201)

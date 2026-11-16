@@ -15,6 +15,7 @@ from .config import Config, get_config
 from .db import DB
 from .events import EventBus
 from .media import Tools, default_tools
+from .sync import Syncer
 from .worker import Worker
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -64,16 +65,21 @@ def create_app(cfg: Config | None = None, tools: Tools | None = None) -> FastAPI
         db = DB(cfg.db_path)
         bus = EventBus()
         app.state.cfg, app.state.db, app.state.bus = cfg, db, bus
-        worker = Worker(cfg, db, bus, tools or default_tools(cfg))
-        app.state.worker = worker
+        the_tools = tools or default_tools(cfg)
+        worker = Worker(cfg, db, bus, the_tools)
+        syncer = Syncer(cfg, db, bus, the_tools, worker)
+        app.state.worker, app.state.syncer = worker, syncer
         if cfg.worker_enabled:
             await worker.start()
+            if cfg.sync_enabled:
+                await syncer.start()
         else:
             bus.bind_loop(asyncio.get_running_loop())
             db.recover()
         try:
             yield
         finally:
+            await syncer.shutdown()
             await worker.shutdown()
             db.close()
 

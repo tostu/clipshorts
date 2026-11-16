@@ -9,6 +9,11 @@
 <body>
 <header>
   <h1>clipshorts</h1>
+  <nav id="tabs" class="tabs">
+    <button type="button" id="tab-clips" class="tab active" data-view="clips">Clips</button>
+    <button type="button" id="tab-inbox" class="tab" data-view="inbox">Inbox
+      <span id="inbox-count" class="count" hidden>0</span></button>
+  </nav>
   <span id="conn" class="conn" title="live updates">offline</span>
 </header>
 
@@ -21,6 +26,7 @@
     </div>
   </form>
 
+  <div id="view-clips">
   <form id="new-form" class="card">
     <label class="grow">Twitch clip URL
       <input id="url" type="url" placeholder="https://clips.twitch.tv/..." required>
@@ -47,8 +53,41 @@
     <p id="form-error" class="error" hidden></p>
   </form>
 
+  <details id="channels-box" class="card" open>
+    <summary>Followed channels <span id="channels-count" class="muted"></span></summary>
+    <p class="muted">New clips of these channels (last 24 h) are downloaded and turned into shorts
+      automatically. Clips already up when you add a channel are skipped.</p>
+    <form id="channel-form" class="row">
+      <label class="grow">Channel
+        <input id="channel-name" type="text" placeholder="name or twitch.tv/name" required>
+      </label>
+      <label>Min views
+        <input id="channel-min" type="number" min="0" value="0">
+      </label>
+      <label>Language
+        <select id="channel-language">
+          <option value="auto">auto</option>
+          <option value="de">de</option>
+          <option value="en">en</option>
+        </select>
+      </label>
+      <button type="submit">Follow</button>
+    </form>
+    <p id="channel-error" class="error" hidden></p>
+    <div id="channels"></div>
+  </details>
+
   <p id="empty" class="muted" hidden>No clips yet.</p>
   <section id="clips"></section>
+  </div>
+
+  <div id="view-inbox" hidden>
+    <p class="muted keys"><kbd>A</kbd> approve · <kbd>R</kbd> reject · <kbd>J</kbd>/<kbd>&darr;</kbd>
+      next · <kbd>K</kbd>/<kbd>&uarr;</kbd> previous · <kbd>Space</kbd> play/pause ·
+      <kbd>U</kbd> undo</p>
+    <p id="inbox-empty" class="muted" hidden>Inbox empty. New shorts show up here.</p>
+    <section id="inbox"></section>
+  </div>
 </main>
 
 <script src="/static/app.js"></script>
