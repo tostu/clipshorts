@@ -177,13 +177,63 @@ class FaceSummary:
     near_corner: bool
 
 
-def primary_faces(detections: Detections) -> list[Box]:
-    """Largest face per frame, for frames that have one."""
-    return [max(fs, key=lambda f: f.box.area).box for fs in detections if fs]
+CONTENT_CAM_PAD = 0.75  # extra cam-sized margin kept out of the content rect (per side)
+TRACK_MAX_DIST = 0.12  # max center distance (normalized) for a face to join a track
+
+
+def primary_faces(detections: Detections, corner_margin: float = 0.35) -> list[Box]:
+    """Boxes of the facecam track: faces are chained across frames by position and the track
+    seen in the most frames wins (ties: the larger face). Faces shown inside the content
+    (images, thumbnails, other streams) are not stable across frames and so lose against
+    the real facecam, however large they are."""
+    tracks: list[list[tuple[int, Box]]] = []
+    for i, fs in enumerate(detections):
+        used: set[int] = set()
+        for f in sorted(fs, key=lambda f: -f.box.area):
+            # a face may move by about its own size between sampled frames
+            best, best_d = None, max(TRACK_MAX_DIST, 2 * f.box.w)
+            for ti, tr in enumerate(tracks):
+                if ti in used:
+                    continue
+                last = tr[-1][1]
+                d = ((last.cx - f.box.cx) ** 2 + (last.cy - f.box.cy) ** 2) ** 0.5
+                if d < best_d:
+                    best, best_d = ti, d
+            if best is None:
+                tracks.append([(i, f.box)])
+                used.add(len(tracks) - 1)
+            else:
+                tracks[best].append((i, f.box))
+                used.add(best)
+    if not tracks:
+        return []
+
+    n = len(detections)
+
+    def frames_of(tr: list[tuple[int, Box]]) -> int:
+        return len({i for i, _ in tr})
+
+    def area_of(tr: list[tuple[int, Box]]) -> float:
+        return statistics.median(b.area for _, b in tr)
+
+    def in_corner(tr: list[tuple[int, Box]]) -> bool:
+        cx = statistics.median(b.cx for _, b in tr)
+        cy = statistics.median(b.cy for _, b in tr)
+        return (cx < corner_margin or cx > 1 - corner_margin) and \
+               (cy < corner_margin or cy > 1 - corner_margin)
+
+    seen = [t for t in tracks if frames_of(t) * 2 >= n]  # present in at least half the frames
+    # 1) a big face is the main cam (fullcam); 2) else a corner overlay is the facecam;
+    # 3) else whatever was seen most
+    big = [t for t in seen if area_of(t) >= STACKED_MAX_AREA]
+    corner = [t for t in seen if in_corner(t)]
+    pool = big or corner or tracks
+    best_track = max(pool, key=lambda t: (frames_of(t), area_of(t)))
+    return [b for _, b in best_track]
 
 
 def summarize_faces(detections: Detections, params: LayoutParams) -> FaceSummary | None:
-    boxes = primary_faces(detections)
+    boxes = primary_faces(detections, params.corner_margin)
     if not boxes:
         return None
     med = Box(
@@ -197,7 +247,11 @@ def summarize_faces(detections: Detections, params: LayoutParams) -> FaceSummary
         frames=len(detections),
         box=med,
         area=statistics.median(b.area for b in boxes),
-        iou=statistics.median(med.iou(b) for b in boxes),
+        # stability of the rect that is actually cropped (face + margin), not of the tiny
+        # face box: a small face moving a little inside a fixed facecam is still stable
+        iou=statistics.median(
+            med.expand(params.facecam_margin_x, params.facecam_margin_y).iou(
+                b.expand(params.facecam_margin_x, params.facecam_margin_y)) for b in boxes),
         near_corner=corner,
     )
 
@@ -265,7 +319,10 @@ def rects_for(layout_type: str, summary: FaceSummary | None, frame_size: tuple[i
         return {"face": face, "crop": fullcam_crop(face, frame_size)}, []
     cam = facecam_rect(face, params)
     if layout_type == STACKED:
-        return {"facecam": cam, "content": content_rect(cam)}, []
+        # the real facecam overlay (frame, chat column, ...) reaches past the face + margin
+        # crop, so keep the content clear of a padded cam to avoid showing the cam twice
+        padded = cam.expand(CONTENT_CAM_PAD, CONTENT_CAM_PAD).clamp()
+        return {"facecam": cam, "content": content_rect(padded)}, []
     if layout_type == FACE:
         return {"face": face, "facecam": cam}, []
     raise ValueError(f"unknown layout type {layout_type!r}")

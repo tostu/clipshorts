@@ -113,6 +113,21 @@ def cover_window(rect: PxRect, tw: int, th: int,
     return PxRect(_even(x), _even(y), cw, ch)
 
 
+def contain_window(rect: PxRect, tw: int, th: int, sw: int, sh: int) -> PxRect:
+    """Smallest window of aspect tw:th that contains `rect`, centered on it and shifted
+    inside the source frame (shrunk, keeping its aspect, if it is larger than the frame)."""
+    aspect = tw / th
+    if rect.w / rect.h >= aspect:
+        cw, ch = float(rect.w), rect.w / aspect
+    else:
+        cw, ch = rect.h * aspect, float(rect.h)
+    k = min(1.0, sw / cw, sh / ch)
+    cw, ch = max(2, _even(cw * k)), max(2, _even(ch * k))
+    x = min(max(rect.x + rect.w / 2 - cw / 2, 0), max(0, sw - cw))
+    y = min(max(rect.y + rect.h / 2 - ch / 2, 0), max(0, sh - ch))
+    return PxRect(_even(x), _even(y), cw, ch)
+
+
 def face_fallback_rect(face: Box, sw: int, sh: int) -> Box:
     """~4:3 (pixels) rect, about 3x face width, centered on the face, clamped to the frame."""
     w_px = min(3 * face.w * sw, float(sw))
@@ -242,15 +257,23 @@ def plan_render(layout: dict[str, Any], probe: dict[str, Any], opts: RenderOptio
     elif eff == STACKED:
         top_h = _even(OUT_H * split)
         bot_h = OUT_H - top_h
-        cam = cover_window(to_px(boxes["facecam"], sw, sh), OUT_W, top_h, focus_of(face))
-        con = cover_window(to_px(boxes["content"], sw, sh), OUT_W, bot_h)
+        cam = contain_window(to_px(boxes["facecam"], sw, sh), OUT_W, top_h, sw, sh)
+        # content is shown whole (fit to width), centered in the bottom slot over a blurred
+        # copy of itself; the facecam fills the top slot
+        con = to_px(boxes["content"], sw, sh)
+        bw, bh = OUT_W // 4, max(2, _even(bot_h // 4))
         graph = (
-            f"{_src(pre)}split=2[cam][con];"
+            f"{_src(pre)}split=3[cam][con][cbg];"
             f"[cam]{_crop(cam)},scale={OUT_W}:{top_h},setsar=1[top];"
-            f"[con]{_crop(con)},scale={OUT_W}:{bot_h},setsar=1[bot];"
+            f"[cbg]{_crop(con)},scale={bw}:{bh}:force_original_aspect_ratio=increase,"
+            f"crop={bw}:{bh},gblur=sigma={opts.blur_sigma:g},scale={OUT_W}:{bot_h},"
+            f"eq=brightness=-0.2,setsar=1[cbb];"
+            f"[con]{_crop(con)},scale={OUT_W}:{bot_h}:force_original_aspect_ratio=decrease:"
+            f"force_divisible_by=2,setsar=1[cfg];"
+            f"[cbb][cfg]overlay=x=(W-w)/2:y=(H-h)/2[bot];"
             f"[top][bot]vstack=inputs=2,{tail}[vout]"
         )
-        filters += ["split", "vstack"]
+        filters += ["split", "gblur", "overlay", "eq", "vstack"]
     else:  # CONTENT: whole frame, fitted over a blurred cover of itself
         bw, bh = OUT_W // 4, OUT_H // 4
         graph = (
