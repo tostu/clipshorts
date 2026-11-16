@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>clipshorts</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <h1>clipshorts</h1>
+  <span id="conn" class="conn" title="live updates">offline</span>
+</header>
+
+<main>
+  <form id="token-form" class="card" hidden>
+    <p>This server needs an access token.</p>
+    <div class="row">
+      <input id="token" type="password" placeholder="token" autocomplete="off" required>
+      <button type="submit">Save</button>
+    </div>
+  </form>
+
+  <form id="new-form" class="card">
+    <label class="grow">Twitch clip URL
+      <input id="url" type="url" placeholder="https://clips.twitch.tv/..." required>
+    </label>
+    <div class="row">
+      <label>Language
+        <select id="language">
+          <option value="auto">auto</option>
+          <option value="de">de</option>
+          <option value="en">en</option>
+        </select>
+      </label>
+      <label>Layout
+        <select id="layout">
+          <option value="auto">auto</option>
+          <option value="fullcam">fullcam</option>
+          <option value="stacked">stacked</option>
+          <option value="face">face</option>
+          <option value="content">content</option>
+        </select>
+      </label>
+      <button type="submit" id="submit">Create short</button>
+    </div>
+    <p id="form-error" class="error" hidden></p>
+  </form>
+
+  <p id="empty" class="muted" hidden>No clips yet.</p>
+  <section id="clips"></section>
+</main>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

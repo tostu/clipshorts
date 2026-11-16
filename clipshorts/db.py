@@ -154,6 +154,14 @@ class DB:
         self._exec(f"UPDATE clips SET {', '.join(sets)} WHERE id=?", (*args, clip_id))
         return self.get_clip(clip_id)
 
+    def delete_clip(self, clip_id: int) -> bool:
+        """Remove the clip row, its renders (cascade) and its finished/failed jobs."""
+        with self._lock:
+            self._conn.execute("DELETE FROM jobs WHERE ref_id=?", (clip_id,))
+            n = self._conn.execute("DELETE FROM clips WHERE id=?", (clip_id,)).rowcount
+            self._conn.commit()
+        return n > 0
+
     # -- renders --------------------------------------------------------
     def add_render(self, clip_id: int, layout_type: str, params: dict, path: str) -> int:
         cur = self._exec(

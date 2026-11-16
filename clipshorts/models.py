@@ -28,6 +28,7 @@ class Clip(BaseModel):
     created_at: str
     updated_at: str
     output_url: str | None = None  # filled by the API when output.mp4 exists
+    detected_language: str | None = None  # filled by the API from transcript.json
 
 
 class ClipCreate(BaseModel):

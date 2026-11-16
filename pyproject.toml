@@ -32,7 +32,7 @@ build-backend = "setuptools.build_meta"
 packages = ["clipshorts"]
 
 [tool.setuptools.package-data]
-clipshorts = ["models/*.onnx", "fonts/*.ttf", "fonts/OFL.txt"]
+clipshorts = ["models/*.onnx", "fonts/*.ttf", "fonts/OFL.txt", "static/*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

@@ -4,9 +4,11 @@ import asyncio
 import hmac
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi.staticfiles import StaticFiles
 
 from .api import router
 from .config import Config, get_config
@@ -15,10 +17,17 @@ from .events import EventBus
 from .media import Tools, default_tools
 from .worker import Worker
 
+STATIC_DIR = Path(__file__).parent / "static"
+
+
+def _is_public(path: str) -> bool:
+    """Healthcheck and the static UI shell (no data in it; it asks for the token itself)."""
+    return path in ("/healthz", "/") or path.startswith("/static/")
+
 
 class AuthMiddleware:
     """Optional bearer token (header `Authorization: Bearer <t>` or `?token=<t>` for
-    EventSource, which cannot set headers). /healthz is always open.
+    EventSource and media URLs, which cannot set headers). /healthz, / and /static are open.
 
     Pure ASGI (not BaseHTTPMiddleware) so SSE streaming is untouched."""
 
@@ -27,7 +36,7 @@ class AuthMiddleware:
         self.token = token
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] != "http" or not self.token or scope["path"] == "/healthz":
+        if scope["type"] != "http" or not self.token or _is_public(scope["path"]):
             return await self.app(scope, receive, send)
         request = Request(scope)
         auth = request.headers.get("authorization", "")
@@ -71,6 +80,12 @@ def create_app(cfg: Config | None = None, tools: Tools | None = None) -> FastAPI
     app = FastAPI(title="clipshorts", lifespan=lifespan)
     app.add_middleware(AuthMiddleware, token=cfg.auth_token)
     app.include_router(router)
+
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+    @app.get("/", include_in_schema=False)
+    def index():
+        return FileResponse(STATIC_DIR / "index.html", headers={"Cache-Control": "no-cache"})
 
     @app.get("/healthz")
     def healthz():

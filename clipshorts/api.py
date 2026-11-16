@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import shutil
 from collections.abc import AsyncIterator, Awaitable, Callable
 
 from fastapi import APIRouter, HTTPException, Request, Response
@@ -10,7 +11,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from .db import DB
 from .events import EventBus
 from .models import Clip, ClipCreate, RerenderBody
-from .pipeline import OUTPUT_FILE
+from .pipeline import OUTPUT_FILE, TRANSCRIPT_FILE
 from .twitch import ClipUrlError, parse_clip_url
 from .worker import Worker
 
@@ -28,6 +29,12 @@ def _output_path(request: Request, clip_id: int):
 def _with_output(request: Request, clip: Clip) -> Clip:
     if _output_path(request, clip.id).is_file():
         clip.output_url = f"/api/clips/{clip.id}/output"
+    try:
+        path = request.app.state.cfg.clip_dir(clip.id) / TRANSCRIPT_FILE
+        lang = json.loads(path.read_text()).get("language")
+        clip.detected_language = lang if isinstance(lang, str) and lang else None
+    except (OSError, ValueError, AttributeError):
+        pass
     return clip
 
 
@@ -76,6 +83,20 @@ def get_clip(request: Request, clip_id: int) -> Clip:
     if not clip:
         raise HTTPException(404, "clip not found")
     return _with_output(request, clip)
+
+
+@router.delete("/clips/{clip_id}", status_code=204)
+def delete_clip(request: Request, clip_id: int) -> Response:
+    db = _db(request)
+    clip = db.get_clip(clip_id)
+    if not clip:
+        raise HTTPException(404, "clip not found")
+    if clip.status in ("queued", "running"):
+        raise HTTPException(409, f"clip is {clip.status}, cannot delete")
+    db.delete_clip(clip_id)
+    shutil.rmtree(request.app.state.cfg.clip_dir(clip_id), ignore_errors=True)
+    request.app.state.bus.publish("deleted", {"id": clip_id})
+    return Response(status_code=204)
 
 
 @router.post("/clips/{clip_id}/rerender")
