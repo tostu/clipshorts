@@ -50,9 +50,8 @@ class Metadata(BaseModel):
     title: str = ""  # hook line, also the YouTube Shorts title
     caption: str = ""  # TikTok / Reels caption (without hashtags)
     hashtags: list[str] = []
-    source: str = "manual"  # auto (defaults, not stored) | llm | manual
+    source: str = "manual"  # auto (defaults, not stored) | manual
     updated_at: str | None = None
-    llm_enabled: bool = False  # set by the API; the UI hides the generate button when false
 
 
 class MetadataUpdate(BaseModel):

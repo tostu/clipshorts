@@ -15,7 +15,6 @@ from .config import Config, get_config
 from .db import DB
 from .events import EventBus
 from .media import Tools, default_tools
-from .metadata import LLM, chat_json
 from .worker import Worker
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -52,8 +51,7 @@ class AuthMiddleware:
         return await resp(scope, receive, send)
 
 
-def create_app(cfg: Config | None = None, tools: Tools | None = None,
-               llm: LLM | None = None) -> FastAPI:
+def create_app(cfg: Config | None = None, tools: Tools | None = None) -> FastAPI:
     cfg = cfg or get_config()
 
     @asynccontextmanager
@@ -80,7 +78,6 @@ def create_app(cfg: Config | None = None, tools: Tools | None = None,
             db.close()
 
     app = FastAPI(title="clipshorts", lifespan=lifespan)
-    app.state.llm = llm or chat_json
     app.add_middleware(AuthMiddleware, token=cfg.auth_token)
     app.include_router(router)
 

@@ -153,34 +153,14 @@ def _clip_or_404(request: Request, clip_id: int) -> Clip:
 
 
 def _current_metadata(request: Request, clip: Clip) -> Metadata:
-    """Stored text, else the no-LLM defaults (clip title, creator + game + fixed hashtags)."""
-    cfg = request.app.state.cfg
-    meta = _db(request).get_metadata(clip.id) or metadata_mod.default_metadata(cfg, clip)
-    meta.llm_enabled = cfg.llm_enabled
-    return meta
+    """Stored (hand-edited) text, else the defaults: clip title + creator, game, fixed hashtags."""
+    return _db(request).get_metadata(clip.id) or metadata_mod.default_metadata(
+        request.app.state.cfg, clip)
 
 
 @router.get("/clips/{clip_id}/metadata")
 def get_metadata(request: Request, clip_id: int) -> Metadata:
     return _current_metadata(request, _clip_or_404(request, clip_id))
-
-
-@router.post("/clips/{clip_id}/metadata/generate")
-def generate_metadata(request: Request, clip_id: int) -> Metadata:
-    """Ask the LLM for title, caption and hashtags. Replaces earlier text (manual edits too),
-    so the UI confirms before calling this when metadata already exists."""
-    clip = _clip_or_404(request, clip_id)
-    cfg = request.app.state.cfg
-    if not cfg.llm_enabled:
-        raise HTTPException(409, "LLM metadata is disabled (set LLM_ENABLED=true)")
-    if clip.status in ("queued", "running"):
-        raise HTTPException(409, f"clip is {clip.status}, wait for the pipeline")
-    try:
-        meta = metadata_mod.generate(cfg, clip, request.app.state.llm)
-    except metadata_mod.MetadataError as e:
-        raise HTTPException(502, str(e)) from e
-    _db(request).set_metadata(clip_id, meta.title, meta.caption, meta.hashtags, "llm")
-    return _current_metadata(request, clip)
 
 
 @router.put("/clips/{clip_id}/metadata")
@@ -191,7 +171,7 @@ def update_metadata(request: Request, clip_id: int, body: MetadataUpdate) -> Met
     cur = _current_metadata(request, clip)
     tags = cur.hashtags
     if body.hashtags is not None:
-        tags = metadata_mod.merge_hashtags([], body.hashtags, cfg.max_hashtags)
+        tags = metadata_mod.merge_hashtags(body.hashtags, cfg.max_hashtags)
     db.set_metadata(
         clip_id,
         cur.title if body.title is None

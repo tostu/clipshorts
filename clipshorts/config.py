@@ -38,14 +38,7 @@ class Config(BaseSettings):
     render_timeout_factor: float = 8.0  # wall-clock limit = factor x clip duration ...
     render_timeout_min_s: float = 120.0  # ... but never below this
 
-    # Metadata (phase 4). Default: no LLM, hashtags = creator + game + the fixed set below.
-    # LLM_ENABLED=true turns on on-demand generation via local Ollama (structured output); it
-    # never runs in the pipeline, so a missing LLM cannot fail a render. keep_alive 0 frees RAM.
-    llm_enabled: bool = False
-    llm_url: str = "http://localhost:11434"
-    llm_model: str = "gemma3:4b"
-    llm_timeout_s: float = 300.0
-    llm_keep_alive: str = "0"
+    # Metadata (phase 4): title = clip title, hashtags = creator + game + the fixed set below.
     # Comma-separated tags added to every short (no leading #), after creator and game.
     # Picked from gaming-clip hashtag guides: Twitch-specific + broad reach, kept short.
     fixed_hashtags: str = "twitchclips,twitch,gaming,fyp"

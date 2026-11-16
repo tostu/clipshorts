@@ -68,9 +68,6 @@ Environment variables or `.env` (see `.env.example`):
 | `RENDER_SPLIT_RATIO` | `0.38` | Stacked layout: facecam share of output height |
 | `RENDER_TIMEOUT_FACTOR` / `RENDER_TIMEOUT_MIN_S` | `8` / `120` | Render timeout = factor x clip duration, at least the minimum |
 | `FIXED_HASHTAGS` / `MAX_HASHTAGS` | `twitchclips,twitch,gaming,fyp` / `8` | Hashtags are creator + game + this set (no `#`), capped at the max |
-| `LLM_ENABLED` | `false` | Optional LLM drafts for title/caption/hashtags; off by default |
-| `LLM_URL` / `LLM_MODEL` | `http://localhost:11434` / `gemma3:4b` | Ollama used when enabled (on demand, never part of the pipeline) |
-| `LLM_TIMEOUT_S` / `LLM_KEEP_ALIVE` | `300` / `0` | LLM request timeout; `0` unloads the model after each call |
 | `NICE_LEVEL` | `10` | Worker niceness |
 | `LOG_LEVEL` | `INFO` | Log level |
 
@@ -88,8 +85,7 @@ GET    /api/clips/{id}/output     MP4, Range supported; ?download=true forces at
 GET    /api/events                SSE: clip state changes
 GET    /healthz                   {"ok": true}
 
-POST   /api/clips/{id}/metadata/generate   LLM draft: title, caption, hashtags (502 if the LLM fails)
-GET    /api/clips/{id}/metadata            stored text (404 until generated or saved)
+GET    /api/clips/{id}/metadata            title + hashtags (defaults until edited by hand)
 PUT    /api/clips/{id}/metadata            {title?, caption?, hashtags?} manual edit
 GET    /api/clips/{id}/export              per-platform copy-paste text + download URL
 GET    /api/clips/{id}/publications        where the short was published
@@ -99,7 +95,7 @@ DELETE /api/publications/{id}
 GET    /api/report/ratings                 channel x layout x rating counts
 ```
 
-Without the LLM (default) a clip's text is its Twitch title plus hashtags `#<creator> #<game> #twitchclips #twitch #gaming #fyp`; the creator is the channel from the clip URL (or Twitch metadata for `clips.twitch.tv` links). `generate` returns 409 until `LLM_ENABLED=true`; then it needs a running Ollama (`ollama pull gemma3:4b`, and from the container `LLM_URL` must point at the host). The UI shows this under "Post text and publishing" on every finished clip. Export is manual: download the MP4 and copy the caption. TikTok/YouTube/Instagram upload is not built.
+A clip's post text is its Twitch title plus hashtags `#<creator> #<game> #twitchclips #twitch #gaming #fyp` (creator = channel from the clip URL, or from Twitch metadata for `clips.twitch.tv` links; set `FIXED_HASHTAGS` to change the fixed part). No LLM involved. The UI shows this under "Post text and publishing" on every finished clip. Export is manual: download the MP4 and copy the caption. TikTok/YouTube/Instagram upload is not built.
 
 Posting a slug that already exists returns the existing clip (and re-queues it if it had failed).
 
