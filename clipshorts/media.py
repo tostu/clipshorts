@@ -113,12 +113,64 @@ def summarize_probe(raw: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+@dataclass(frozen=True)
+class SampledFrame:
+    index: int
+    t: float  # seconds into the clip
+    path: Path  # full-resolution original (kept for cropping)
+    det_path: Path  # downscaled copy used for detection
+
+
+def ffmpeg_extract_frames(
+    src: Path,
+    times: list[float],
+    out_dir: Path,
+    ffmpeg_bin: str = "ffmpeg",
+    det_width: int = 640,
+    on_progress: Callable[[float], None] | None = None,
+) -> list[SampledFrame]:
+    """One JPEG per timestamp: frame_NN.jpg (original) and det_NN.jpg (det_width wide)."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    frames: list[SampledFrame] = []
+    for i, t in enumerate(times):
+        orig, det = out_dir / f"frame_{i:02d}.jpg", out_dir / f"det_{i:02d}.jpg"
+        cmd = [
+            ffmpeg_bin, "-nostdin", "-v", "error", "-y", "-ss", f"{t:.3f}", "-i", str(src),
+            "-map", "0:v:0", "-frames:v", "1", "-q:v", "2", str(orig),
+            "-map", "0:v:0", "-frames:v", "1", "-vf", f"scale={det_width}:-2", "-q:v", "3",
+            str(det),
+        ]
+        try:
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        except FileNotFoundError as e:
+            raise MediaError(f"{ffmpeg_bin} not found") from e
+        except subprocess.TimeoutExpired as e:
+            raise MediaError(f"ffmpeg frame extraction timed out at {t:.1f}s") from e
+        if res.returncode != 0 or not orig.exists() or not det.exists():
+            raise MediaError(f"ffmpeg could not extract a frame at {t:.1f}s: "
+                             f"{res.stderr.strip()[:300]}")
+        frames.append(SampledFrame(i, t, orig, det))
+        if on_progress:
+            on_progress((i + 1) / len(times))
+    return frames
+
+
+def analyze_frames_yunet(det_paths: list[Path], model_path: Path, score_threshold: float,
+                         on_progress: Callable[[float], None] | None = None):
+    """Default face analysis (lazy import keeps OpenCV out of the unit-test path)."""
+    from .detect import analyze_with_yunet
+
+    return analyze_with_yunet(det_paths, model_path, score_threshold, on_progress)
+
+
 @dataclass
 class Tools:
     """Injectable external calls. Tests replace the callables."""
 
     download: Callable[..., dict[str, Any]] = ytdlp_download
     probe: Callable[..., dict[str, Any]] = ffprobe
+    extract_frames: Callable[..., list[SampledFrame]] = ffmpeg_extract_frames
+    analyze_frames: Callable[..., Any] = analyze_frames_yunet
 
 
 def default_tools(cfg: Config) -> Tools:

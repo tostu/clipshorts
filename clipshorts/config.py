@@ -5,6 +5,8 @@ from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+YUNET_FILE = "face_detection_yunet_2023mar.onnx"
+
 
 class Config(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
@@ -25,6 +27,14 @@ class Config(BaseSettings):
     ffprobe_bin: str = "ffprobe"
     ytdlp_format: str = "best"
 
+    # Layout detection. Empty yunet_model = the model vendored under clipshorts/models/.
+    yunet_model: Path | None = None
+    layout_frames: int = 8
+    layout_det_width: int = 640
+    layout_score_threshold: float = 0.7
+    # JSON in env, e.g. LAYOUT_OVERRIDES='{"fullcam_min_area": 0.1}'; keys: LayoutParams fields
+    layout_overrides: dict[str, float] = {}
+
     # Worker runs at low priority so other workloads are not starved
     nice_level: int = 10
     worker_enabled: bool = True
@@ -34,6 +44,10 @@ class Config(BaseSettings):
     @property
     def language_list(self) -> list[str]:
         return [x.strip().lower() for x in self.languages.split(",") if x.strip()]
+
+    @property
+    def yunet_model_path(self) -> Path:
+        return self.yunet_model or Path(__file__).parent / "models" / YUNET_FILE
 
     @property
     def db_path(self) -> Path:

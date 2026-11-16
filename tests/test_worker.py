@@ -15,7 +15,7 @@ async def test_process_one_runs_job_and_parks_at_unimplemented_stage(cfg, db, bu
         await w.shutdown()
     assert db.get_job(job.id).status == "done"
     row = db.get_clip(c.id)
-    assert row.status == "waiting" and row.stage == "layout"
+    assert row.status == "waiting" and row.stage == "transcribe"
     assert row.title == "Big Play"
 
 

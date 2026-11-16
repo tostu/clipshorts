@@ -3,7 +3,8 @@ import pytest
 from clipshorts.config import Config
 from clipshorts.db import DB
 from clipshorts.events import EventBus
-from clipshorts.media import MediaError, Tools
+from clipshorts.layout import Box, Face, FrameAnalysis
+from clipshorts.media import MediaError, SampledFrame, Tools
 
 
 @pytest.fixture
@@ -31,8 +32,12 @@ class FakeTools:
     def __init__(self, fail_download: str | None = None, fail_probe: str | None = None):
         self.downloads: list[str] = []
         self.probes: list[str] = []
+        self.extractions: list[list[float]] = []
+        self.analyses: list[int] = []
         self.fail_download = fail_download
         self.fail_probe = fail_probe
+        self.fail_analyze: str | None = None
+        self.analysis_faces: list[Face] | None = None
 
     def download(self, url, dest, fmt="best", on_progress=None):
         self.downloads.append(url)
@@ -52,8 +57,34 @@ class FakeTools:
         return {"duration": 30.0, "width": 1920, "height": 1080, "fps": 60.0,
                 "video_codec": "h264", "audio_codec": "aac", "has_audio": True}
 
+    def extract_frames(self, src, times, out_dir, ffmpeg_bin="ffmpeg", det_width=640,
+                       on_progress=None):
+        self.extractions.append(list(times))
+        out_dir.mkdir(parents=True, exist_ok=True)
+        frames = []
+        for i, t in enumerate(times):
+            orig, det = out_dir / f"frame_{i:02d}.jpg", out_dir / f"det_{i:02d}.jpg"
+            orig.write_bytes(b"jpg")
+            det.write_bytes(b"jpg")
+            frames.append(SampledFrame(i, t, orig, det))
+        if on_progress:
+            on_progress(1.0)
+        return frames
+
+    def analyze_frames(self, det_paths, model_path, score_threshold, on_progress=None):
+        self.analyses.append(len(det_paths))
+        if self.fail_analyze:
+            raise MediaError(self.fail_analyze)
+        n = len(det_paths)
+        if self.analysis_faces is None:  # default: big centered face in every frame
+            dets = [[Face(Box(0.35, 0.15, 0.3, 0.5), 0.9)] for _ in range(n)]
+        else:
+            dets = [list(self.analysis_faces) for _ in range(n)]
+        return FrameAnalysis((640, 360), dets, None)
+
     def as_tools(self) -> Tools:
-        return Tools(download=self.download, probe=self.probe)
+        return Tools(download=self.download, probe=self.probe,
+                     extract_frames=self.extract_frames, analyze_frames=self.analyze_frames)
 
 
 @pytest.fixture

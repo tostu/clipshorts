@@ -18,6 +18,18 @@ from typing import Any
 from .config import Config
 from .db import DB
 from .events import EventBus
+from .layout import (
+    Box,
+    Face,
+    FrameAnalysis,
+    LayoutParams,
+    classify,
+    rects_for,
+    rects_to_json,
+    rects_to_pixels,
+    sample_times,
+    summarize_faces,
+)
 from .media import MediaError, Tools
 from .models import Clip
 
@@ -109,12 +121,144 @@ def _probe(ctx: StageContext) -> None:
     )
 
 
+# -- layout (M2) -----------------------------------------------------------------
+LAYOUT_FILE = "layout.json"
+FRAMES_DIR = "frames"
+
+
+def _read_json(path: Path) -> dict[str, Any]:
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _effective_override(clip: Clip) -> str | None:
+    return None if clip.layout_override in (None, "", "auto") else clip.layout_override
+
+
+def _layout_params(clip: Clip, cfg: Config) -> dict[str, Any]:
+    model = cfg.yunet_model_path
+    return {
+        "override": _effective_override(clip),
+        "frames": cfg.layout_frames,
+        "det_width": cfg.layout_det_width,
+        "score": cfg.layout_score_threshold,
+        "model": model.name,
+        "thresholds": LayoutParams.from_overrides(cfg.layout_overrides).as_dict(),
+    }
+
+
+def _detection_key(cfg: Config, src: Path, duration: float) -> str:
+    """Identity of the expensive part (frames + YuNet). Excludes thresholds and override."""
+    model = cfg.yunet_model_path
+    size = model.stat().st_size if model.is_file() else None
+    return params_hash("layout-detect", {
+        "frames": cfg.layout_frames, "det_width": cfg.layout_det_width,
+        "score": cfg.layout_score_threshold, "model": model.name, "model_size": size,
+        "src_size": src.stat().st_size if src.exists() else None,
+        "duration": round(duration, 3),
+    })
+
+
+def _cached_analysis(prev: dict[str, Any], key: str, clip_dir: Path
+                     ) -> tuple[FrameAnalysis, list[dict[str, Any]]] | None:
+    """Rebuild detections from an earlier layout.json when the detection inputs are unchanged."""
+    try:
+        if prev.get("detection_key") != key:
+            return None
+        frames = prev["frames"]
+        if not frames or not all((clip_dir / f["file"]).exists() for f in frames):
+            return None
+        dets = [[Face(Box.from_list(f["box"]), float(f["score"])) for f in fr["faces"]]
+                for fr in frames]
+        w, h = prev["frame_size"]
+        return FrameAnalysis((int(w), int(h)), dets, prev.get("motion")), frames
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _layout(ctx: StageContext) -> None:
+    cfg, d = ctx.cfg, ctx.dir
+    meta = _read_json(d / "meta.json")
+    probe = meta.get("ffprobe", {})
+    duration = probe.get("duration") or ctx.clip.duration_s
+    if not duration or duration <= 0:
+        raise StageError("clip duration unknown, cannot sample frames")
+    src = d / "source.mp4"
+    params = LayoutParams.from_overrides(cfg.layout_overrides)
+    key = _detection_key(cfg, src, duration)
+
+    cached = _cached_analysis(_read_json(d / LAYOUT_FILE), key, d)
+    if cached is not None:
+        analysis, frames_json = cached
+        ctx.progress(0.9)
+    else:
+        times = sample_times(duration, cfg.layout_frames)
+        frames = ctx.tools.extract_frames(
+            src, times, d / FRAMES_DIR, cfg.ffmpeg_bin, cfg.layout_det_width,
+            lambda f: ctx.progress(f * 0.6),
+        )
+        analysis = ctx.tools.analyze_frames(
+            [f.det_path for f in frames], cfg.yunet_model_path, cfg.layout_score_threshold,
+            lambda f: ctx.progress(0.6 + f * 0.4),
+        )
+        if len(analysis.detections) != len(frames):
+            raise StageError("detector returned a different number of frames than extracted")
+        frames_json = [
+            {"index": f.index, "t": f.t, "file": f.path.relative_to(d).as_posix(),
+             "det_file": f.det_path.relative_to(d).as_posix(),
+             "faces": [{"box": face.box.to_list(), "score": round(face.score, 3)}
+                       for face in faces]}
+            for f, faces in zip(frames, analysis.detections, strict=True)
+        ]
+
+    detected = classify(analysis.detections, analysis.motion, analysis.size, params)
+    summary = summarize_faces(analysis.detections, params)
+    override = _effective_override(ctx.clip)
+    if override:
+        rects, extra = rects_for(override, summary, analysis.size, params)
+        notes = [f"manual override: {override} (detected {detected.type})", *extra]
+        final = {"source": "override", "type": override, "confidence": 1.0, "rects": rects,
+                 "notes": notes}
+    else:
+        final = {"source": "auto", "type": detected.type, "confidence": detected.confidence,
+                 "rects": detected.rects, "notes": detected.notes}
+
+    sw, sh = probe.get("width"), probe.get("height")
+    out = {
+        "version": 1,
+        "detection_key": key,
+        "source": final["source"],
+        "type": final["type"],
+        "confidence": final["confidence"],
+        "rects": rects_to_json(final["rects"]),
+        "rects_px": rects_to_pixels(final["rects"], sw, sh) if sw and sh else None,
+        "notes": final["notes"],
+        "detected": {
+            "type": detected.type, "confidence": detected.confidence,
+            "rects": rects_to_json(detected.rects), "notes": detected.notes,
+            "stats": detected.stats,
+        },
+        "frame_size": list(analysis.size),
+        "source_size": [sw, sh] if sw and sh else None,
+        "frames": frames_json,
+        "motion": analysis.motion,
+        "thresholds": params.as_dict(),
+    }
+    tmp = d / (LAYOUT_FILE + ".tmp")
+    tmp.write_text(json.dumps(out, indent=2))
+    tmp.replace(d / LAYOUT_FILE)
+    ctx.db.update_clip(ctx.clip.id, layout_type=final["type"],
+                       layout_confidence=final["confidence"])
+
+
 STAGES: list[Stage] = [
     Stage("download", ["source.mp4"],
           lambda c, cfg: {"slug": c.slug, "format": cfg.ytdlp_format}, _download),
     Stage("probe", ["meta.json"], lambda c, cfg: {}, _probe),
-    Stage("layout", ["layout.json"],
-          lambda c, cfg: {"override": c.layout_override}),
+    Stage("layout", [LAYOUT_FILE], _layout_params, _layout),
     Stage("transcribe", ["transcript.json"],
           lambda c, cfg: {"language": c.language, "allowed": cfg.language_list,
                           "model": cfg.whisper_model, "compute": cfg.whisper_compute_type}),

@@ -33,16 +33,16 @@ def test_m1_stages_run_and_write_artifacts(cfg, db, bus, fake_tools):
     c = _clip(db)
     q = bus.subscribe()
     res = run_pipeline(c.id, cfg, db, bus, fake_tools.as_tools())
-    # layout is not implemented yet: pipeline parks the clip there
-    assert res.status == "waiting" and res.stage == "layout"
-    assert res.ran == ["download", "probe"]
+    # transcribe is not implemented yet: pipeline parks the clip there
+    assert res.status == "waiting" and res.stage == "transcribe"
+    assert res.ran == ["download", "probe", "layout"]
     d = cfg.clip_dir(c.id)
     assert (d / "source.mp4").exists()
     meta = json.loads((d / "meta.json").read_text())
     assert meta["twitch"]["title"] == "Big Play"
     assert meta["ffprobe"]["width"] == 1920
     row = db.get_clip(c.id)
-    assert row.status == "waiting" and row.stage == "layout"
+    assert row.status == "waiting" and row.stage == "transcribe"
     assert row.title == "Big Play" and row.channel == "somestreamer" and row.game == "Tetris"
     assert row.duration_s == 30.0
     assert not q.empty()  # events were published
@@ -53,7 +53,7 @@ def test_rerun_is_cached(cfg, db, bus, fake_tools):
     t = fake_tools.as_tools()
     run_pipeline(c.id, cfg, db, bus, t)
     res = run_pipeline(c.id, cfg, db, bus, t)
-    assert res.ran == [] and res.skipped == ["download", "probe"]
+    assert res.ran == [] and res.skipped == ["download", "probe", "layout"]
     assert len(fake_tools.downloads) == 1 and len(fake_tools.probes) == 1
 
 
@@ -115,7 +115,7 @@ def test_probe_error_keeps_download_cached(cfg, db, bus):
     assert db.get_clip(c.id).error.startswith("probe:")
     ft.fail_probe = None  # retry: download must not repeat
     res = run_pipeline(c.id, cfg, db, bus, ft.as_tools())
-    assert res.skipped == ["download"] and res.ran == ["probe"]
+    assert res.skipped == ["download"] and res.ran == ["probe", "layout"]
     assert len(ft.downloads) == 1
     assert db.get_clip(c.id).error is None
 
