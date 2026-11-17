@@ -3,8 +3,6 @@
 import asyncio
 import json
 import shutil
-import subprocess
-import threading
 from collections.abc import AsyncIterator, Awaitable, Callable
 
 from fastapi import APIRouter, HTTPException, Request, Response
@@ -14,7 +12,7 @@ from . import metadata as metadata_mod
 from .captions import clean_hook, clean_words, expand_edited
 from .db import DB
 from .events import EventBus
-from .media import MediaError, ffprobe
+from .media import browser_playable
 from .models import (
     CaptionsOut,
     CaptionsUpdate,
@@ -300,45 +298,9 @@ def get_raw(request: Request, clip_id: int):
     path = cfg.clip_dir(clip_id) / SOURCE_FILE
     if not path.is_file():
         raise HTTPException(404, "no download yet")
-    path = _browser_playable(cfg, path)
+    path = browser_playable(cfg, path)
     return FileResponse(path, media_type="video/mp4", filename=f"{clip.slug}-raw.mp4",
                         content_disposition_type="inline")
-
-
-_preview_lock = threading.Lock()
-
-
-def _browser_playable(cfg, src):
-    """Twitch sometimes serves HEVC, which most browsers cannot play. For those, build (once)
-    and serve a small H.264 preview next to the source. Any probe/ffmpeg trouble falls back
-    to the original file."""
-    preview = src.with_name("preview.mp4")
-    if preview.is_file() and preview.stat().st_mtime >= src.stat().st_mtime:
-        return preview
-    try:
-        codec = ffprobe(src, cfg.ffprobe_bin).get("video_codec")
-    except MediaError:
-        return src
-    if codec in (None, "h264"):
-        return src
-    tmp = preview.with_name("preview.tmp.mp4")
-    with _preview_lock:
-        if preview.is_file() and preview.stat().st_mtime >= src.stat().st_mtime:
-            return preview
-        cmd = [cfg.ffmpeg_bin, "-nostdin", "-hide_banner", "-v", "error", "-y", "-i", str(src),
-               "-vf", "scale=-2:'min(720,ih)'", "-c:v", "libx264", "-preset", "veryfast",
-               "-crf", "26", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k",
-               "-movflags", "+faststart", str(tmp)]
-        try:
-            res = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-        except (OSError, subprocess.TimeoutExpired):
-            tmp.unlink(missing_ok=True)
-            return src
-        if res.returncode != 0 or not tmp.is_file():
-            tmp.unlink(missing_ok=True)
-            return src
-        tmp.replace(preview)
-    return preview
 
 
 # -- metadata + export (phase 4) ----------------------------------------------------------

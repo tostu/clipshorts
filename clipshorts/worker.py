@@ -10,8 +10,8 @@ from functools import partial
 from .config import Config
 from .db import DB
 from .events import EventBus
-from .media import Tools, apply_nice
-from .pipeline import FETCH_UNTIL, PipelineResult, run_pipeline
+from .media import Tools, apply_nice, browser_playable
+from .pipeline import FETCH_UNTIL, SOURCE_FILE, PipelineResult, run_pipeline
 
 log = logging.getLogger(__name__)
 
@@ -91,5 +91,11 @@ class Worker:
             return True
         if res.status == "cancelled":
             return True  # shutdown mid-render: job stays 'running', recovery re-queues it
+        if job.kind == "fetch" and res.status != "failed":
+            # build the browser preview now, not on the first (timing-out) video request
+            src = self.cfg.clip_dir(job.ref_id) / SOURCE_FILE
+            if src.is_file():
+                with contextlib.suppress(Exception):
+                    await loop.run_in_executor(self._pool, browser_playable, self.cfg, src)
         self.db.finish_job(job.id, res.status != "failed", res.error)
         return True

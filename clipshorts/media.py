@@ -3,6 +3,7 @@
 import json
 import os
 import subprocess
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -116,6 +117,42 @@ def ffprobe(path: Path, ffprobe_bin: str = "ffprobe") -> dict[str, Any]:
     if res.returncode != 0:
         raise MediaError(f"ffprobe failed: {res.stderr.strip()[:300]}")
     return summarize_probe(json.loads(res.stdout))
+
+
+_preview_lock = threading.Lock()
+
+
+def browser_playable(cfg: Config, src: Path) -> Path:
+    """Twitch sometimes serves HEVC, which most browsers cannot play. For those, build (once)
+    and return a small H.264 preview next to the source. Any probe/ffmpeg trouble falls back
+    to the original file."""
+    preview = src.with_name("preview.mp4")
+    if preview.is_file() and preview.stat().st_mtime >= src.stat().st_mtime:
+        return preview
+    try:
+        codec = ffprobe(src, cfg.ffprobe_bin).get("video_codec")
+    except MediaError:
+        return src
+    if codec in (None, "h264"):
+        return src
+    tmp = preview.with_name("preview.tmp.mp4")
+    with _preview_lock:
+        if preview.is_file() and preview.stat().st_mtime >= src.stat().st_mtime:
+            return preview
+        cmd = [cfg.ffmpeg_bin, "-nostdin", "-hide_banner", "-v", "error", "-y", "-i", str(src),
+               "-vf", "scale=-2:'min(720,ih)'", "-c:v", "libx264", "-preset", "veryfast",
+               "-crf", "26", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k",
+               "-movflags", "+faststart", str(tmp)]
+        try:
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        except (OSError, subprocess.TimeoutExpired):
+            tmp.unlink(missing_ok=True)
+            return src
+        if res.returncode != 0 or not tmp.is_file():
+            tmp.unlink(missing_ok=True)
+            return src
+        tmp.replace(preview)
+    return preview
 
 
 def _fps(rate: str | None) -> float | None:
