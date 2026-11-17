@@ -3,15 +3,17 @@
 import asyncio
 import json
 import shutil
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 
 from fastapi import APIRouter, HTTPException, Request, Response
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 
 from . import metadata as metadata_mod
 from .captions import clean_hook, clean_words, expand_edited
 from .db import DB
 from .events import EventBus
+from .media import MediaError
 from .models import (
     CaptionsOut,
     CaptionsUpdate,
@@ -286,6 +288,28 @@ def get_output(request: Request, clip_id: int, download: bool = False):
         path, media_type="video/mp4", filename=f"{clip.slug}.mp4",
         content_disposition_type="attachment" if download else "inline",
     )
+
+
+_stream_cache: dict[str, tuple[float, str]] = {}  # source_url -> (expires_at, cdn url)
+_STREAM_TTL = 600.0
+
+
+@router.get("/clips/{clip_id}/preview")
+def get_preview(request: Request, clip_id: int):
+    """Preview of a clip that is not downloaded yet: redirect to Twitch's own CDN mp4 so the
+    browser streams it directly. The CDN URL expires, so it is resolved per request (cached
+    briefly); nothing is downloaded or transcoded on the server."""
+    clip = _clip_or_404(request, clip_id)
+    now = time.monotonic()
+    hit = _stream_cache.get(clip.source_url)
+    if hit is None or hit[0] < now:
+        try:
+            url = request.app.state.tools.stream_url(clip.source_url)
+        except MediaError as e:
+            raise HTTPException(502, str(e)) from e
+        hit = (now + _STREAM_TTL, url)
+        _stream_cache[clip.source_url] = hit
+    return RedirectResponse(hit[1], status_code=302)
 
 
 @router.get("/clips/{clip_id}/raw")

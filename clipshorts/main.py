@@ -68,6 +68,7 @@ def create_app(cfg: Config | None = None, tools: Tools | None = None) -> FastAPI
         bus = EventBus()
         app.state.cfg, app.state.db, app.state.bus = cfg, db, bus
         the_tools = tools or default_tools(cfg)
+        app.state.tools = the_tools
         worker = Worker(cfg, db, bus, the_tools)
         syncer = Syncer(cfg, db, bus, the_tools, worker)
         app.state.worker, app.state.syncer = worker, syncer

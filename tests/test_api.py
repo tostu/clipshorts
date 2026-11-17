@@ -53,6 +53,16 @@ def test_process_requires_fetched_and_enqueues_pipeline(client):
     assert [j.kind for j in db.list_jobs("queued")] == ["fetch", "pipeline"]
 
 
+def test_preview_redirects_to_cdn_without_downloading(cfg, fake_tools):
+    with TestClient(create_app(cfg, fake_tools.as_tools())) as c:
+        cid = c.post("/api/clips", json={"url": URL}).json()["id"]
+        r = c.get(f"/api/clips/{cid}/preview", follow_redirects=False)
+        assert r.status_code == 302
+        assert r.headers["location"] == "https://cdn.example/clip.mp4?sig=abc"
+        assert c.get("/api/clips/99/preview").status_code == 404
+    assert fake_tools.downloads == []
+
+
 def test_raw_serves_source_when_downloaded(client, cfg):
     cid = client.post("/api/clips", json={"url": URL}).json()["id"]
     assert client.get(f"/api/clips/{cid}/raw").status_code == 404

@@ -31,9 +31,7 @@ def test_index_and_assets_served(client):
     assert "text/css" in client.get("/static/style.css").headers["content-type"]
     # self-contained: no external origins referenced
     assert "http://" not in r.text.replace("http://www.w3.org", "")
-    # the one allowed origin is Twitch's own clip embed (preview before processing)
-    js = client.get("/static/app.js").text.replace("https://clips.twitch.tv/embed", "")
-    assert "//cdn" not in r.text and "https://" not in js
+    assert "//cdn" not in r.text and "https://" not in client.get("/static/app.js").text
 
 
 def test_filter_controls_shipped(client):

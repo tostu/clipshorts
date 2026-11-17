@@ -373,28 +373,15 @@ function updateCard(c) {
   card.hook.save.disabled = active;
   card.hook.sync(c);
 
-  // Unprocessed (fetched) clips show Twitch's own embedded player: nothing is downloaded
-  // until Process. Otherwise swap the <video> src only when the file changed (updated_at
+  // Unprocessed (fetched) clips stream straight from Twitch's CDN via a redirect: nothing is
+  // downloaded until Process. Swap the <video> src only when the file changed (updated_at
   // moves on every re-render).
-  const embed = c.status === "fetched" && !c.output_url;
-  const videoUrl = c.output_url || c.raw_url;
-  if (embed) {
-    if (card.embedSlug !== c.slug) {
-      card.embedSlug = c.slug;
-      card.videoSrc = "";
-      card.preview.classList.add("embed");
-      card.preview.replaceChildren(el("iframe", {
-        src: "https://clips.twitch.tv/embed?clip=" + encodeURIComponent(c.slug)
-          + "&parent=" + encodeURIComponent(location.hostname) + "&autoplay=false",
-        loading: "lazy", allowFullscreen: true, title: c.title || c.slug,
-      }));
-    }
-  } else if (videoUrl) {
+  const videoUrl = c.output_url
+    || (c.status === "fetched" ? `/api/clips/${c.id}/preview` : c.raw_url);
+  if (videoUrl) {
     const src = withToken(videoUrl + (c.status === "done" || c.status === "fetched" ? "?v=" + encodeURIComponent(c.updated_at) : ""));
     if (card.videoSrc !== src && !active) {
       card.videoSrc = src;
-      card.embedSlug = "";
-      card.preview.classList.remove("embed");
       setLazySrc(card.video, src);
       card.preview.replaceChildren(card.video);
     }

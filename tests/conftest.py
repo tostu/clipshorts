@@ -62,6 +62,9 @@ class FakeTools:
         return {"title": "Big Play", "channel": "somestreamer", "game": "Tetris",
                 "duration": 31.5, "id": "x", "timestamp": 1_700_000_000}
 
+    def stream_url(self, url):
+        return "https://cdn.example/clip.mp4?sig=abc"
+
     def download(self, url, dest, fmt="best", on_progress=None):
         self.downloads.append(url)
         if self.fail_download:
@@ -133,7 +136,8 @@ class FakeTools:
         return [dict(c) for c in self.channel_clips.get(channel, [])]
 
     def as_tools(self) -> Tools:
-        return Tools(download=self.download, fetch_info=self.fetch_info, probe=self.probe,
+        return Tools(download=self.download, fetch_info=self.fetch_info,
+                     stream_url=self.stream_url, probe=self.probe,
                      extract_frames=self.extract_frames, analyze_frames=self.analyze_frames,
                      transcribe=self.transcribe, render=self.render,
                      list_clips=self.list_clips)

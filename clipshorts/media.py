@@ -76,6 +76,24 @@ def _trim_info(info: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def ytdlp_stream_url(url: str) -> str:
+    """Direct (expiring) CDN URL of the clip's mp4, for browser playback. Prefers H.264,
+    which every browser plays; downloads nothing."""
+    import yt_dlp
+
+    opts = {"noplaylist": True, "quiet": True, "no_warnings": True, "skip_download": True,
+            "format": "best[vcodec^=avc1]/best"}
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+    except yt_dlp.utils.DownloadError as e:
+        raise MediaError(f"yt-dlp: {e}") from e
+    stream = (info or {}).get("url")
+    if not stream:
+        raise MediaError("no stream url for clip")
+    return stream
+
+
 def ytdlp_fetch_info(url: str) -> dict[str, Any]:
     """Metadata only (title, channel, game, duration, timestamp); downloads nothing."""
     import yt_dlp
@@ -236,6 +254,7 @@ class Tools:
 
     download: Callable[..., dict[str, Any]] = ytdlp_download
     fetch_info: Callable[..., dict[str, Any]] = ytdlp_fetch_info  # (url) -> metadata, no download
+    stream_url: Callable[..., str] = ytdlp_stream_url  # (url) -> direct CDN mp4 URL
     probe: Callable[..., dict[str, Any]] = ffprobe
     extract_frames: Callable[..., list[SampledFrame]] = ffmpeg_extract_frames
     analyze_frames: Callable[..., Any] = analyze_frames_yunet
