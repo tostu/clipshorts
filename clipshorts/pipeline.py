@@ -19,7 +19,7 @@ from typing import Any
 
 from .captions import FONT_FILE, CaptionStyle, captions_from_transcript, clean_hook
 from .config import Config
-from .db import DB
+from .db import DB, epoch_to_iso
 from .events import EventBus
 from .layout import (
     Box,
@@ -129,6 +129,7 @@ def _probe(ctx: StageContext) -> None:
         channel=(tw.get("channel") or ctx.clip.channel),
         game=tw.get("game") or ctx.clip.game,
         duration_s=probe.get("duration") or tw.get("duration"),
+        clip_created_at=epoch_to_iso(tw.get("timestamp")) or ctx.clip.clip_created_at,
     )
 
 

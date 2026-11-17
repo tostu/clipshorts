@@ -62,6 +62,17 @@ def test_later_sync_queues_only_new_clips(cfg, db, bus, fake_tools):
     assert got.total_queued == 1 and got.last_queued == 0 and got.last_error is None
 
 
+def test_sync_stores_twitch_clip_creation_time(cfg, db, bus, fake_tools):
+    ch = db.add_channel("gronkh")
+    fake_tools.channel_clips["gronkh"] = []
+    run(cfg, db, bus, fake_tools, ch)
+    fake_tools.channel_clips["gronkh"] = [{**item("NewClipSlug1"), "timestamp": 1700000000}]
+    run(cfg, db, bus, fake_tools, ch)
+    [clip] = db.list_clips()
+    assert clip.clip_created_at.startswith("2023-11-14T22:13:20")
+    assert clip.clip_created_at != clip.created_at
+
+
 def test_deleted_clip_is_not_requeued(cfg, db, bus, fake_tools):
     ch = db.add_channel("gronkh")
     fake_tools.channel_clips["gronkh"] = []

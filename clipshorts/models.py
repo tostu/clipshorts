@@ -28,6 +28,7 @@ class Clip(BaseModel):
     layout_override: str | None = None
     review_status: ReviewStatus = "pending"  # inbox triage of a finished short
     reviewed_at: str | None = None
+    clip_created_at: str | None = None  # when the clip was made on Twitch (not our download time)
     created_at: str
     updated_at: str
     output_url: str | None = None  # filled by the API when output.mp4 exists

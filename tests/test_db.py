@@ -20,6 +20,18 @@ def test_clip_crud(db):
         db.update_clip(c.id, nonsense=1)
 
 
+def test_backfill_clip_created_at(db, tmp_path):
+    has_meta = db.create_clip("u", "withmeta1")
+    no_meta = db.create_clip("u", "nometa111")
+    (tmp_path / str(has_meta.id)).mkdir()
+    (tmp_path / str(has_meta.id) / "meta.json").write_text(
+        '{"twitch": {"timestamp": 1700000000}}')
+    assert db.backfill_clip_created_at(tmp_path) == 1
+    assert db.get_clip(has_meta.id).clip_created_at.startswith("2023-11-14T22:13:20")
+    assert db.get_clip(no_meta.id).clip_created_at is None
+    assert db.backfill_clip_created_at(tmp_path) == 0  # idempotent
+
+
 def test_settings_roundtrip(db):
     assert db.get_setting("k", "d") == "d"
     db.set_setting("k", {"a": 1})

@@ -12,7 +12,7 @@ import logging
 from dataclasses import dataclass
 
 from .config import Config
-from .db import DB
+from .db import DB, epoch_to_iso
 from .events import EventBus
 from .media import MediaError, Tools
 from .twitch import ClipUrlError, parse_clip_url
@@ -68,7 +68,8 @@ def sync_channel(cfg: Config, db: DB, bus: EventBus, tools: Tools, channel_id: i
             canonical = parse_clip_url(item["url"]).canonical_url
         except ClipUrlError:
             continue
-        clip = db.create_clip(canonical, slug, channel=ch.name, language=ch.language)
+        clip = db.create_clip(canonical, slug, channel=ch.name, language=ch.language,
+                              clip_created_at=epoch_to_iso(item.get("timestamp")))
         db.enqueue_job("fetch", clip.id)  # raw clip + title only; processing is manual
         bus.publish("clip", clip.model_dump())
         res.queued += 1

@@ -414,7 +414,7 @@ const localDay = (iso) => {
 function matchesFilters(c) {
   const day = $("filter-day").value;
   const creator = $("filter-creator").value;
-  return (!day || localDay(c.created_at) === day) && (!creator || c.channel === creator);
+  return (!day || localDay(c.clip_created_at || c.created_at) === day) && (!creator || c.channel === creator);
 }
 
 function refreshCreators() {

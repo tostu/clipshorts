@@ -63,6 +63,8 @@ def create_app(cfg: Config | None = None, tools: Tools | None = None) -> FastAPI
         )
         cfg.clips_dir.mkdir(parents=True, exist_ok=True)
         db = DB(cfg.db_path)
+        if n := db.backfill_clip_created_at(cfg.clips_dir):
+            logging.getLogger(__name__).info("backfilled clip_created_at for %d clip(s)", n)
         bus = EventBus()
         app.state.cfg, app.state.db, app.state.bus = cfg, db, bus
         the_tools = tools or default_tools(cfg)

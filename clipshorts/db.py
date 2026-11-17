@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS clips (
     layout_override TEXT,
     review_status TEXT NOT NULL DEFAULT 'pending',
     reviewed_at TEXT,
+    clip_created_at TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -101,12 +102,20 @@ CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status, id);
 
 CLIP_FIELDS = {
     "channel", "title", "game", "duration_s", "status", "stage", "progress", "error",
-    "language", "layout_type", "layout_confidence", "layout_override",
+    "language", "layout_type", "layout_confidence", "layout_override", "clip_created_at",
 }
 
 
 def now_iso() -> str:
     return datetime.now(UTC).isoformat(timespec="milliseconds")
+
+
+def epoch_to_iso(ts) -> str | None:
+    """Unix seconds (as yt-dlp reports the Twitch clip creation time) -> ISO UTC, else None."""
+    try:
+        return datetime.fromtimestamp(float(ts), UTC).isoformat(timespec="milliseconds")
+    except (TypeError, ValueError, OverflowError, OSError):
+        return None
 
 
 class DB:
@@ -129,6 +138,8 @@ class DB:
                 "ALTER TABLE clips ADD COLUMN review_status TEXT NOT NULL DEFAULT 'pending'")
         if "reviewed_at" not in cols:
             self._conn.execute("ALTER TABLE clips ADD COLUMN reviewed_at TEXT")
+        if "clip_created_at" not in cols:
+            self._conn.execute("ALTER TABLE clips ADD COLUMN clip_created_at TEXT")
         self._conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_clips_review ON clips(status, review_status)")
 
@@ -170,12 +181,14 @@ class DB:
         channel: str | None = None,
         language: str = "auto",
         layout_override: str | None = None,
+        clip_created_at: str | None = None,
     ) -> Clip:
         ts = now_iso()
         cur = self._exec(
             "INSERT INTO clips(source_url, slug, channel, language, layout_override, "
-            "status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'queued', ?, ?)",
-            (source_url, slug, channel, language, layout_override, ts, ts),
+            "clip_created_at, status, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?)",
+            (source_url, slug, channel, language, layout_override, clip_created_at, ts, ts),
         )
         clip = self.get_clip(cur.lastrowid)
         assert clip
@@ -219,6 +232,23 @@ class DB:
             args.append(v)
         self._exec(f"UPDATE clips SET {', '.join(sets)} WHERE id=?", (*args, clip_id))
         return self.get_clip(clip_id)
+
+    def backfill_clip_created_at(self, clips_dir: Path) -> int:
+        """Fill clip_created_at of older rows from the twitch timestamp saved in meta.json.
+
+        Leaves updated_at alone (the UI keys the video on it). Returns rows filled."""
+        rows = self._all("SELECT id FROM clips WHERE clip_created_at IS NULL")
+        filled = 0
+        for r in rows:
+            try:
+                meta = json.loads((clips_dir / str(r["id"]) / "meta.json").read_text())
+                iso = epoch_to_iso(meta["twitch"]["timestamp"])
+            except (OSError, ValueError, KeyError, TypeError):
+                continue
+            if iso:
+                self._exec("UPDATE clips SET clip_created_at=? WHERE id=?", (iso, r["id"]))
+                filled += 1
+        return filled
 
     def delete_clip(self, clip_id: int) -> bool:
         """Remove the clip row, its renders (cascade) and its finished/failed jobs."""
