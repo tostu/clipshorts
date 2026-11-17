@@ -33,7 +33,7 @@ class Clip(BaseModel):
     output_url: str | None = None  # filled by the API when output.mp4 exists
     raw_url: str | None = None  # filled by the API when the downloaded source.mp4 exists
     detected_language: str | None = None  # filled by the API from transcript.json
-    hook: str | None = None  # filled by the API from hook.json: text shown on the video's first seconds
+    hook: str | None = None  # filled by the API from hook.json (text on the first seconds)
 
 
 class InboxItem(BaseModel):
