@@ -3,7 +3,6 @@
 import json
 import os
 import subprocess
-import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -57,6 +56,10 @@ def ytdlp_download(
         produced.replace(dest)
     if not dest.exists() or dest.stat().st_size == 0:
         raise MediaError("download produced an empty file")
+    return _trim_info(info)
+
+
+def _trim_info(info: dict[str, Any]) -> dict[str, Any]:
     cats = info.get("categories") or []
     return {
         "id": info.get("id"),
@@ -71,6 +74,19 @@ def ytdlp_download(
         "timestamp": info.get("timestamp"),
         "webpage_url": info.get("webpage_url"),
     }
+
+
+def ytdlp_fetch_info(url: str) -> dict[str, Any]:
+    """Metadata only (title, channel, game, duration, timestamp); downloads nothing."""
+    import yt_dlp
+
+    opts = {"noplaylist": True, "quiet": True, "no_warnings": True, "skip_download": True}
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+    except yt_dlp.utils.DownloadError as e:
+        raise MediaError(f"yt-dlp: {e}") from e
+    return _trim_info(info or {})
 
 
 def ytdlp_list_clips(channel: str, range_: str = "24hr", limit: int = 50) -> list[dict[str, Any]]:
@@ -117,42 +133,6 @@ def ffprobe(path: Path, ffprobe_bin: str = "ffprobe") -> dict[str, Any]:
     if res.returncode != 0:
         raise MediaError(f"ffprobe failed: {res.stderr.strip()[:300]}")
     return summarize_probe(json.loads(res.stdout))
-
-
-_preview_lock = threading.Lock()
-
-
-def browser_playable(cfg: Config, src: Path) -> Path:
-    """Twitch sometimes serves HEVC, which most browsers cannot play. For those, build (once)
-    and return a small H.264 preview next to the source. Any probe/ffmpeg trouble falls back
-    to the original file."""
-    preview = src.with_name("preview.mp4")
-    if preview.is_file() and preview.stat().st_mtime >= src.stat().st_mtime:
-        return preview
-    try:
-        codec = ffprobe(src, cfg.ffprobe_bin).get("video_codec")
-    except MediaError:
-        return src
-    if codec in (None, "h264"):
-        return src
-    tmp = preview.with_name("preview.tmp.mp4")
-    with _preview_lock:
-        if preview.is_file() and preview.stat().st_mtime >= src.stat().st_mtime:
-            return preview
-        cmd = [cfg.ffmpeg_bin, "-nostdin", "-hide_banner", "-v", "error", "-y", "-i", str(src),
-               "-vf", "scale=-2:'min(720,ih)'", "-c:v", "libx264", "-preset", "veryfast",
-               "-crf", "26", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k",
-               "-movflags", "+faststart", str(tmp)]
-        try:
-            res = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-        except (OSError, subprocess.TimeoutExpired):
-            tmp.unlink(missing_ok=True)
-            return src
-        if res.returncode != 0 or not tmp.is_file():
-            tmp.unlink(missing_ok=True)
-            return src
-        tmp.replace(preview)
-    return preview
 
 
 def _fps(rate: str | None) -> float | None:
@@ -255,6 +235,7 @@ class Tools:
     """Injectable external calls. Tests replace the callables."""
 
     download: Callable[..., dict[str, Any]] = ytdlp_download
+    fetch_info: Callable[..., dict[str, Any]] = ytdlp_fetch_info  # (url) -> metadata, no download
     probe: Callable[..., dict[str, Any]] = ffprobe
     extract_frames: Callable[..., list[SampledFrame]] = ffmpeg_extract_frames
     analyze_frames: Callable[..., Any] = analyze_frames_yunet

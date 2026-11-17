@@ -31,6 +31,7 @@ class FakeTools:
 
     def __init__(self, fail_download: str | None = None, fail_probe: str | None = None):
         self.downloads: list[str] = []
+        self.fetches: list[str] = []
         self.probes: list[str] = []
         self.extractions: list[list[float]] = []
         self.analyses: list[int] = []
@@ -55,6 +56,11 @@ class FakeTools:
                 {"word": "Wirklich", "start": 1.2, "end": 1.6},
             ],
         }
+
+    def fetch_info(self, url):
+        self.fetches.append(url)
+        return {"title": "Big Play", "channel": "somestreamer", "game": "Tetris",
+                "duration": 31.5, "id": "x", "timestamp": 1_700_000_000}
 
     def download(self, url, dest, fmt="best", on_progress=None):
         self.downloads.append(url)
@@ -127,7 +133,7 @@ class FakeTools:
         return [dict(c) for c in self.channel_clips.get(channel, [])]
 
     def as_tools(self) -> Tools:
-        return Tools(download=self.download, probe=self.probe,
+        return Tools(download=self.download, fetch_info=self.fetch_info, probe=self.probe,
                      extract_frames=self.extract_frames, analyze_frames=self.analyze_frames,
                      transcribe=self.transcribe, render=self.render,
                      list_clips=self.list_clips)

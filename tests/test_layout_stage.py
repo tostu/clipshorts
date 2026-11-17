@@ -19,7 +19,7 @@ def _layout(cfg, cid):
 def test_layout_stage_writes_json_and_db_row(cfg, db, bus, fake_tools):
     c = _clip(db)
     res = run_pipeline(c.id, cfg, db, bus, fake_tools.as_tools())
-    assert res.ran == ["download", "probe", "layout", "transcribe", "captions", "render"]
+    assert res.ran == ["meta", "download", "probe", "layout", "transcribe", "captions", "render"]
     assert res.status == "done" and res.stage == "render"
     data = _layout(cfg, c.id)
     assert data["type"] == "fullcam" and data["source"] == "auto"
@@ -123,7 +123,8 @@ def test_missing_yunet_model_fails_stage_clearly(cfg, db, bus, tmp_path):
     from tests.conftest import FakeTools
 
     ft = FakeTools()
-    tools = Tools(download=ft.download, probe=ft.probe, extract_frames=ft.extract_frames)
+    tools = Tools(download=ft.download, fetch_info=ft.fetch_info, probe=ft.probe,
+                  extract_frames=ft.extract_frames)
     cfg2 = Config(data_dir=cfg.data_dir, worker_enabled=False, nice_level=0, _env_file=None,
                   yunet_model=tmp_path / "missing.onnx")
     c = _clip(db)

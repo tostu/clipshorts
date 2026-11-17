@@ -12,7 +12,7 @@ from clipshorts.pipeline import (
 
 def test_stage_order():
     assert [s.name for s in STAGES] == STAGE_NAMES == [
-        "download", "probe", "layout", "transcribe", "captions", "render"
+        "meta", "download", "probe", "layout", "transcribe", "captions", "render"
     ]
 
 
@@ -29,18 +29,20 @@ def _clip(db):
     return c
 
 
-def test_until_probe_stops_after_metadata_then_full_run_resumes(cfg, db, bus, fake_tools):
+def test_until_meta_fetches_metadata_without_download_then_full_run_resumes(
+        cfg, db, bus, fake_tools):
     c = _clip(db)
     t = fake_tools.as_tools()
-    res = run_pipeline(c.id, cfg, db, bus, t, until="probe")
-    assert res.status == "fetched" and res.ran == ["download", "probe"]
+    res = run_pipeline(c.id, cfg, db, bus, t, until="meta")
+    assert res.status == "fetched" and res.ran == ["meta"]
     row = db.get_clip(c.id)
-    assert row.status == "fetched" and row.title == "Big Play" and row.duration_s == 30.0
-    assert (cfg.clip_dir(c.id) / "source.mp4").exists()
-    assert not (cfg.clip_dir(c.id) / "output.mp4").exists()
+    assert row.status == "fetched" and row.title == "Big Play" and row.duration_s == 31.5
+    assert fake_tools.downloads == [] and fake_tools.probes == []
+    assert not (cfg.clip_dir(c.id) / "source.mp4").exists()
     assert fake_tools.transcriptions == [] and fake_tools.renders == []
     res = run_pipeline(c.id, cfg, db, bus, t)
-    assert res.status == "done" and res.skipped == ["download", "probe"]
+    assert res.status == "done" and res.skipped == ["meta"]
+    assert len(fake_tools.downloads) == 1
     assert db.get_clip(c.id).status == "done"
 
 
@@ -49,7 +51,7 @@ def test_m1_stages_run_and_write_artifacts(cfg, db, bus, fake_tools):
     q = bus.subscribe()
     res = run_pipeline(c.id, cfg, db, bus, fake_tools.as_tools())
     assert res.status == "done" and res.stage == "render"
-    assert res.ran == ["download", "probe", "layout", "transcribe", "captions", "render"]
+    assert res.ran == ["meta", "download", "probe", "layout", "transcribe", "captions", "render"]
     d = cfg.clip_dir(c.id)
     assert (d / "source.mp4").exists()
     meta = json.loads((d / "meta.json").read_text())
@@ -70,7 +72,8 @@ def test_rerun_is_cached(cfg, db, bus, fake_tools):
     run_pipeline(c.id, cfg, db, bus, t)
     res = run_pipeline(c.id, cfg, db, bus, t)
     assert res.ran == []
-    assert res.skipped == ["download", "probe", "layout", "transcribe", "captions", "render"]
+    assert res.skipped == ["meta", "download", "probe", "layout", "transcribe", "captions",
+                           "render"]
     assert len(fake_tools.renders) == 1
     assert len(fake_tools.downloads) == 1 and len(fake_tools.probes) == 1
 
@@ -81,7 +84,7 @@ def test_missing_artifact_reruns_stage(cfg, db, bus, fake_tools):
     run_pipeline(c.id, cfg, db, bus, t)
     (cfg.clip_dir(c.id) / "meta.json").unlink()
     res = run_pipeline(c.id, cfg, db, bus, t)
-    assert "probe" in res.ran and "download" in res.skipped
+    assert res.ran == ["meta"] and "download" in res.skipped
 
 
 def test_param_change_invalidates_downstream_only(cfg, db, bus):
@@ -133,7 +136,7 @@ def test_probe_error_keeps_download_cached(cfg, db, bus):
     assert db.get_clip(c.id).error.startswith("probe:")
     ft.fail_probe = None  # retry: download must not repeat
     res = run_pipeline(c.id, cfg, db, bus, ft.as_tools())
-    assert res.skipped == ["download"]
+    assert res.skipped == ["meta", "download"]
     assert res.ran == ["probe", "layout", "transcribe", "captions", "render"]
     assert len(ft.downloads) == 1
     assert db.get_clip(c.id).error is None

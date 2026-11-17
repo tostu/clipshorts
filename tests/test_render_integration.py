@@ -95,8 +95,9 @@ def make_tools(source: Path, words: list[dict], face: Box = CORNER) -> tuple[Too
         return {"title": "Synthetic", "channel": "test", "game": "Testsrc"}
 
     base = Tools()
-    tools = Tools(download=download, probe=base.probe, extract_frames=base.extract_frames,
-                  analyze_frames=ft.analyze_frames, transcribe=ft.transcribe, render=base.render)
+    tools = Tools(download=download, fetch_info=ft.fetch_info, probe=base.probe,
+                  extract_frames=base.extract_frames, analyze_frames=ft.analyze_frames,
+                  transcribe=ft.transcribe, render=base.render)
     return tools, ft
 
 

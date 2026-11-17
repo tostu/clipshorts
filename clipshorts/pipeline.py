@@ -40,9 +40,9 @@ from .transcribe import WHISPER_SETTINGS, empty_transcript
 
 log = logging.getLogger(__name__)
 
-STAGE_NAMES = ["download", "probe", "layout", "transcribe", "captions", "render"]
+STAGE_NAMES = ["meta", "download", "probe", "layout", "transcribe", "captions", "render"]
 SOURCE_FILE = "source.mp4"
-FETCH_UNTIL = "probe"  # default job stops here: raw clip + title/channel/game/duration
+FETCH_UNTIL = "meta"  # fetch job stops here: title/channel/game/duration, no download
 STATE_FILE = "stages.json"
 
 
@@ -102,6 +102,26 @@ def is_fresh(stage: Stage, clip_dir: Path, state: dict[str, Any], h: str) -> boo
 
 
 # -- stage implementations (M1) ----------------------------------------------
+def _meta(ctx: StageContext) -> None:
+    """Title/channel/game/duration from Twitch without downloading the clip."""
+    info = ctx.tools.fetch_info(ctx.clip.source_url)
+    meta_path = ctx.dir / "meta.json"
+    try:
+        meta = json.loads(meta_path.read_text())
+    except (OSError, ValueError):
+        meta = {}
+    meta["twitch"] = info
+    meta_path.write_text(json.dumps(meta, indent=2, ensure_ascii=False))
+    ctx.db.update_clip(
+        ctx.clip.id,
+        title=info.get("title") or ctx.clip.title,
+        channel=info.get("channel") or ctx.clip.channel,
+        game=info.get("game") or ctx.clip.game,
+        duration_s=info.get("duration") or ctx.clip.duration_s,
+        clip_created_at=epoch_to_iso(info.get("timestamp")) or ctx.clip.clip_created_at,
+    )
+
+
 def _download(ctx: StageContext) -> None:
     dest = ctx.dir / "source.mp4"
     info = ctx.tools.download(
@@ -394,8 +414,11 @@ def _render(ctx: StageContext) -> None:
 # transcribe depends on the source only (probe); captions on the transcript; render on
 # captions AND layout. A layout override therefore re-runs layout + render, nothing else.
 STAGES: list[Stage] = [
+    Stage("meta", ["meta.json"], lambda c, cfg: {"slug": c.slug}, _meta),
+    # after=(): download's hash must not depend on meta, or clips downloaded before the
+    # meta stage existed would be re-downloaded
     Stage("download", ["source.mp4"],
-          lambda c, cfg: {"slug": c.slug, "format": cfg.ytdlp_format}, _download),
+          lambda c, cfg: {"slug": c.slug, "format": cfg.ytdlp_format}, _download, after=()),
     Stage("probe", ["meta.json"], lambda c, cfg: {}, _probe),
     Stage("layout", [LAYOUT_FILE], _layout_params, _layout),
     Stage("transcribe", [TRANSCRIPT_FILE], _transcribe_params, _transcribe, after=("probe",)),

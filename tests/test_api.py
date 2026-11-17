@@ -196,8 +196,8 @@ def test_rerender_end_to_end_with_worker(tmp_path, fake_tools):
 
         fetched = wait_done(("fetched", "failed"))
         assert fetched["status"] == "fetched" and fetched["output_url"] is None
-        assert fetched["raw_url"] == f"/api/clips/{cid}/raw"
-        assert c.get(fetched["raw_url"]).status_code == 200
+        assert fetched["title"] == "Big Play"
+        assert fetched["raw_url"] is None and fake_tools.downloads == []  # embed, no download
         assert fake_tools.transcriptions == [] and fake_tools.renders == []
         assert c.post(f"/api/clips/{cid}/process").status_code == 200
         assert c.post(f"/api/clips/{cid}/process").status_code == 409  # already queued

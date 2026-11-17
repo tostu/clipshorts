@@ -1,6 +1,6 @@
 "use strict";
 
-const STAGES = ["download", "probe", "layout", "transcribe", "captions", "render"];
+const STAGES = ["meta", "download", "probe", "layout", "transcribe", "captions", "render"];
 const LAYOUTS = ["auto", "fullcam", "stacked", "face", "content"];
 const LOW_CONFIDENCE = 0.6;
 const TOKEN_KEY = "clipshorts_token";
@@ -347,7 +347,7 @@ function updateCard(c) {
   [...card.stages.children].forEach((chip, i) => {
     let cls = "stage";
     if (c.status === "done") cls += " done";
-    else if (c.status === "fetched") { if (i < 2) cls += " done"; }
+    else if (c.status === "fetched") { if (i < 1) cls += " done"; }
     else if (c.status === "failed" && i === cur) cls += " failed";
     else if (cur >= 0 && i < cur) cls += " done";
     else if (active && i === cur) cls += " active";
@@ -373,13 +373,28 @@ function updateCard(c) {
   card.hook.save.disabled = active;
   card.hook.sync(c);
 
-  // video: swap src only when the file changed (updated_at moves on every re-render).
-  // Unprocessed clips show the raw download.
+  // Unprocessed (fetched) clips show Twitch's own embedded player: nothing is downloaded
+  // until Process. Otherwise swap the <video> src only when the file changed (updated_at
+  // moves on every re-render).
+  const embed = c.status === "fetched" && !c.output_url;
   const videoUrl = c.output_url || c.raw_url;
-  if (videoUrl) {
+  if (embed) {
+    if (card.embedSlug !== c.slug) {
+      card.embedSlug = c.slug;
+      card.videoSrc = "";
+      card.preview.classList.add("embed");
+      card.preview.replaceChildren(el("iframe", {
+        src: "https://clips.twitch.tv/embed?clip=" + encodeURIComponent(c.slug)
+          + "&parent=" + encodeURIComponent(location.hostname) + "&autoplay=false",
+        loading: "lazy", allowFullscreen: true, title: c.title || c.slug,
+      }));
+    }
+  } else if (videoUrl) {
     const src = withToken(videoUrl + (c.status === "done" || c.status === "fetched" ? "?v=" + encodeURIComponent(c.updated_at) : ""));
     if (card.videoSrc !== src && !active) {
       card.videoSrc = src;
+      card.embedSlug = "";
+      card.preview.classList.remove("embed");
       setLazySrc(card.video, src);
       card.preview.replaceChildren(card.video);
     }

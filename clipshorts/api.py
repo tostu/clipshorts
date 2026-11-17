@@ -12,7 +12,6 @@ from . import metadata as metadata_mod
 from .captions import clean_hook, clean_words, expand_edited
 from .db import DB
 from .events import EventBus
-from .media import browser_playable
 from .models import (
     CaptionsOut,
     CaptionsUpdate,
@@ -144,9 +143,8 @@ def rerender(request: Request, clip_id: int, body: RerenderBody | None = None) -
     fields: dict = {}
     if body is not None and body.layout is not None:
         fields["layout_override"] = None if body.layout == "auto" else body.layout
-    # a clip that never got past download/probe only needs the cheap fetch again
-    kind = "fetch" if clip.status == "failed" and clip.stage in ("download", "probe") \
-        else "pipeline"
+    # a clip whose metadata fetch failed only needs the cheap fetch again
+    kind = "fetch" if clip.status == "failed" and clip.stage == "meta" else "pipeline"
     return _with_output(request, _requeue(request, clip_id, kind=kind, **fields))
 
 
@@ -298,7 +296,6 @@ def get_raw(request: Request, clip_id: int):
     path = cfg.clip_dir(clip_id) / SOURCE_FILE
     if not path.is_file():
         raise HTTPException(404, "no download yet")
-    path = browser_playable(cfg, path)
     return FileResponse(path, media_type="video/mp4", filename=f"{clip.slug}-raw.mp4",
                         content_disposition_type="inline")
 

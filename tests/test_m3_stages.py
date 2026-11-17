@@ -65,7 +65,7 @@ def test_layout_override_reruns_only_layout_and_render(cfg, db, bus, fake_tools)
     db.update_clip(c.id, layout_override="stacked")
     res = run_pipeline(c.id, cfg, db, bus, t)
     assert res.ran == ["layout", "render"]
-    assert res.skipped == ["download", "probe", "transcribe", "captions"]
+    assert res.skipped == ["meta", "download", "probe", "transcribe", "captions"]
     assert res.status == "done" and res.stage == "render"
     assert len(fake_tools.transcriptions) == 1
     assert (cfg.clip_dir(c.id) / CAPTIONS_FILE).stat().st_mtime_ns == ass_before

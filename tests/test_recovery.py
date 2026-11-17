@@ -24,7 +24,7 @@ def test_restart_resumes_without_redownload(tmp_path):
     db.enqueue_job("pipeline", clip.id)
     db.claim_next_job()
     first = FakeTools()
-    run_pipeline(clip.id, cfg, db, EventBus(), first.as_tools(), stages=STAGES[:1])
+    run_pipeline(clip.id, cfg, db, EventBus(), first.as_tools(), stages=STAGES[:2])
     assert len(first.downloads) == 1
     assert (cfg.clip_dir(clip.id) / "stages.json").is_file()
     assert (cfg.clip_dir(clip.id) / "source.mp4").is_file()
