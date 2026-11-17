@@ -23,6 +23,29 @@ function withToken(url) {
 }
 function needToken() { $("token-form").hidden = false; }
 
+// -- lazy video sources -------------------------------------------------------
+// Chrome caps live media players (~75); a <video> with a src holds one even when offscreen.
+// So only videos near the viewport get their src; paused offscreen ones release it.
+const lazyVideos = new IntersectionObserver((entries) => {
+  for (const e of entries) {
+    const v = e.target;
+    v._near = e.isIntersecting;
+    if (v._near) {
+      if (v._lazySrc && v.getAttribute("src") !== v._lazySrc) v.src = v._lazySrc;
+    } else if (v.paused && v.getAttribute("src")) {
+      v.removeAttribute("src");
+      v.load(); // drops the decoder / WebMediaPlayer
+    }
+  }
+}, { rootMargin: "400px" });
+
+function setLazySrc(video, src) {
+  video._lazySrc = src;
+  if (video._near) video.src = src;
+  else if (video.getAttribute("src")) video.removeAttribute("src");
+  lazyVideos.observe(video); // no-op if already observed
+}
+
 async function api(path, opts = {}) {
   const headers = { ...(opts.headers || {}) };
   const t = getToken();
@@ -357,7 +380,7 @@ function updateCard(c) {
     const src = withToken(videoUrl + (c.status === "done" || c.status === "fetched" ? "?v=" + encodeURIComponent(c.updated_at) : ""));
     if (card.videoSrc !== src && !active) {
       card.videoSrc = src;
-      card.video.src = src;
+      setLazySrc(card.video, src);
       card.preview.replaceChildren(card.video);
     }
   }
@@ -374,7 +397,7 @@ function updateCard(c) {
 function removeCard(id) {
   clips.delete(id);
   const card = cards.get(id);
-  if (card) { card.root.remove(); cards.delete(id); }
+  if (card) { lazyVideos.unobserve(card.video); card.root.remove(); cards.delete(id); }
   $("empty").hidden = clips.size > 0;
   applyFilters();
   renderInbox();
@@ -513,7 +536,7 @@ function updateInboxCard(c) {
     ...[c.layout_type ? "layout: " + c.layout_type : null, lang ? "language: " + lang : null]
       .filter(Boolean).map((t) => badge(t)));
   const src = withToken(c.output_url + "?v=" + encodeURIComponent(c.updated_at));
-  if (card.src !== src) { card.src = src; card.video.src = src; }
+  if (card.src !== src) { card.src = src; setLazySrc(card.video, src); }
   return card;
 }
 
@@ -524,7 +547,10 @@ function renderInbox() {
   $("inbox-count").hidden = n === 0;
   $("inbox-empty").hidden = n > 0;
   for (const [id, card] of [...inboxCards]) {
-    if (!ids.includes(id)) { card.video.pause(); card.root.remove(); inboxCards.delete(id); }
+    if (!ids.includes(id)) {
+      card.video.pause(); lazyVideos.unobserve(card.video);
+      card.root.remove(); inboxCards.delete(id);
+    }
   }
   if (view !== "inbox") { inboxSig = ""; return; } // only build players while the tab is open
   // progress events of other clips fire constantly; re-attaching a <video> would stop playback
