@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .captions import FONT_FILE, CaptionStyle, captions_from_transcript
+from .captions import FONT_FILE, CaptionStyle, captions_from_transcript, clean_hook
 from .config import Config
 from .db import DB
 from .events import EventBus
@@ -269,6 +269,7 @@ def _layout(ctx: StageContext) -> None:
 TRANSCRIPT_FILE = "transcript.json"
 CAPTIONS_FILE = "captions.ass"
 CAPTIONS_EDIT_FILE = "captions_edit.json"
+HOOK_FILE = "hook.json"
 
 
 def _manual_language(clip: Clip) -> str | None:
@@ -314,12 +315,20 @@ def _edit_words(clip_dir: Path) -> list[dict[str, Any]] | None:
     return words if isinstance(words, list) else None
 
 
+def hook_text(clip_dir: Path) -> str:
+    """Hand-written hook line (hook.json), '' when there is none."""
+    text = _read_json(clip_dir / HOOK_FILE).get("text")
+    return clean_hook(text) if isinstance(text, str) else ""
+
+
 def _captions_params(clip: Clip, cfg: Config) -> dict[str, Any]:
     font = cfg.fonts_dir / FONT_FILE
-    edit = _edit_words(cfg.clip_dir(clip.id))
+    d = cfg.clip_dir(clip.id)
+    edit = _edit_words(d)
     return {"style": _caption_style(cfg).as_dict(), "font": FONT_FILE,
             "font_bytes": font.stat().st_size if font.is_file() else None,
-            "edit": None if edit is None else params_hash("edit", {"words": edit})}
+            "edit": None if edit is None else params_hash("edit", {"words": edit}),
+            "hook": hook_text(d) or None}
 
 
 def _captions(ctx: StageContext) -> None:
@@ -328,7 +337,7 @@ def _captions(ctx: StageContext) -> None:
     if edit is not None:
         transcript = {**transcript, "words": edit}
     ass, _ = captions_from_transcript(transcript, _caption_style(ctx.cfg),
-                                      ctx.cfg.fonts_dir / FONT_FILE)
+                                      ctx.cfg.fonts_dir / FONT_FILE, hook_text(ctx.dir))
     tmp = ctx.dir / (CAPTIONS_FILE + ".tmp")
     tmp.write_text(ass, encoding="utf-8")
     tmp.replace(ctx.dir / CAPTIONS_FILE)

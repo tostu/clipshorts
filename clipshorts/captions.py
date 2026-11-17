@@ -72,6 +72,16 @@ class CaptionStyle:
     highlight: str = "&H0000D7FF"  # gold (BGR)
     outline_colour: str = "&H00000000"
     hold_s: float = 0.2  # keep the last word visible this long (never into the next caption)
+    # hook: attention line shown at the start, in the upper third (clear of TikTok's top bar,
+    # right button column and the caption/description area at the bottom)
+    hook_font_size: int = 72
+    hook_min_font_size: int = 44
+    hook_max_lines: int = 3
+    hook_seconds: float = 3.0
+    hook_top: int = 330  # distance of the first line from the top edge, px of 1920
+    hook_box: str = "&H00FFFFFF"  # opaque box behind the text (white)
+    hook_text: str = "&H00000000"  # black text on the box
+    hook_pad: int = 16  # box padding around the text
 
     @property
     def margin_v(self) -> int:
@@ -238,15 +248,63 @@ def _header(style: CaptionStyle) -> str:
         f"Style: Default,{FONT_FAMILY},{s.font_size},{s.primary},{s.primary},"
         f"{s.outline_colour},&H64000000,-1,0,0,0,100,100,0,0,1,{s.outline},0,2,"
         f"{s.margin_l},{s.margin_r},{s.margin_v},1\n"
+        f"Style: Hook,{FONT_FAMILY},{s.hook_font_size},{s.hook_text},{s.hook_text},"
+        f"{s.hook_box},&H00000000,-1,0,0,0,100,100,0,0,3,{s.hook_pad},0,8,"
+        f"{s.margin_l},{s.margin_r},{s.hook_top},1\n"
         "\n"
         "[Events]\n"
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
     )
 
 
-def build_ass(chunks: list[Chunk], style: CaptionStyle) -> str:
-    """One event per word: the chunk text with the active word in the highlight colour."""
+HOOK_MAX_CHARS = 100
+
+
+def clean_hook(text: str | None) -> str:
+    """Single-line hook text: whitespace collapsed, limited to HOOK_MAX_CHARS."""
+    return " ".join((text or "").split())[:HOOK_MAX_CHARS]
+
+
+def wrap_hook(text: str, style: CaptionStyle,
+              font_path: Path | None = None) -> tuple[list[str], int]:
+    """Break `text` into lines that fit the frame; the font shrinks until at most
+    `hook_max_lines` lines are needed. Returns (lines, font_size)."""
+    avail = style.max_width - 2 * style.hook_pad
+    words = text.split()
+    size = style.hook_font_size
+    while True:
+        lines: list[str] = []
+        for w in words:
+            if lines and text_width(f"{lines[-1]} {w}", size, font_path) <= avail:
+                lines[-1] += f" {w}"
+            else:
+                lines.append(w)
+        fits = len(lines) <= style.hook_max_lines and all(
+            text_width(ln, size, font_path) <= avail for ln in lines)
+        if fits or size <= style.hook_min_font_size:
+            return lines, size
+        size = max(style.hook_min_font_size, size - 2)
+
+
+def hook_event(text: str, style: CaptionStyle, font_path: Path | None = None) -> str | None:
+    """Dialogue line showing the hook from t=0 for `hook_seconds` (None for empty text)."""
+    text = clean_hook(text)
+    if not text:
+        return None
+    lines, size = wrap_hook(_esc(text), style, font_path)
+    body = "\\N".join(lines)
+    end = round(style.hook_seconds * 100)
+    return (f"Dialogue: 1,{_ts(0)},{_ts(end)},Hook,,0,0,0,,"
+            f"{{\\fs{size}\\fad(150,250)}}{body}")
+
+
+def build_ass(chunks: list[Chunk], style: CaptionStyle, hook: str | None = None,
+              font_path: Path | None = None) -> str:
+    """One event per word: the chunk text with the active word in the highlight colour.
+    An optional hook line is added on top for the first seconds."""
     lines: list[str] = []
+    if hook and (ev := hook_event(hook, style, font_path)):
+        lines.append(ev)
     for ci, ch in enumerate(chunks):
         next_start = chunks[ci + 1].start if ci + 1 < len(chunks) else None
         for wi, w in enumerate(ch.words):
@@ -271,7 +329,8 @@ def build_ass(chunks: list[Chunk], style: CaptionStyle) -> str:
 
 
 def captions_from_transcript(transcript: dict[str, Any], style: CaptionStyle,
-                             font_path: Path | None = None) -> tuple[str, list[Chunk]]:
+                             font_path: Path | None = None,
+                             hook: str | None = None) -> tuple[str, list[Chunk]]:
     words = clean_words(transcript.get("words", []))
     chunks = chunk_words(words, style, transcript.get("language"), font_path)
-    return build_ass(chunks, style), chunks
+    return build_ass(chunks, style, hook, font_path), chunks

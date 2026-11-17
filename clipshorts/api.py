@@ -11,7 +11,7 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse
 
 from . import metadata as metadata_mod
-from .captions import clean_words, expand_edited
+from .captions import clean_hook, clean_words, expand_edited
 from .db import DB
 from .events import EventBus
 from .media import MediaError, ffprobe
@@ -23,6 +23,7 @@ from .models import (
     ChannelUpdate,
     Clip,
     ClipCreate,
+    HookUpdate,
     InboxItem,
     Metadata,
     MetadataUpdate,
@@ -33,11 +34,13 @@ from .models import (
 )
 from .pipeline import (
     CAPTIONS_EDIT_FILE,
+    HOOK_FILE,
     OUTPUT_FILE,
     SOURCE_FILE,
     TRANSCRIPT_FILE,
     _edit_words,
     _read_json,
+    hook_text,
 )
 from .sync import Syncer
 from .twitch import ClipUrlError, parse_channel, parse_clip_url
@@ -65,6 +68,7 @@ def _with_output(request: Request, clip: Clip) -> Clip:
         clip.detected_language = lang if isinstance(lang, str) and lang else None
     except (OSError, ValueError, AttributeError):
         pass
+    clip.hook = hook_text(request.app.state.cfg.clip_dir(clip.id))
     return clip
 
 
@@ -213,6 +217,22 @@ def reset_captions(request: Request, clip_id: int) -> Clip:
     """Drop hand edits, back to the Whisper text, and re-render."""
     _idle_clip(request, clip_id)
     (request.app.state.cfg.clip_dir(clip_id) / CAPTIONS_EDIT_FILE).unlink(missing_ok=True)
+    return _with_output(request, _requeue(request, clip_id))
+
+
+@router.put("/clips/{clip_id}/hook")
+def update_hook(request: Request, clip_id: int, body: HookUpdate) -> Clip:
+    """Set the hook text shown over the first seconds (empty removes it); re-runs captions +
+    render only."""
+    _idle_clip(request, clip_id)
+    path = request.app.state.cfg.clip_dir(clip_id) / HOOK_FILE
+    text = clean_hook(body.text)
+    if text:
+        tmp = path.with_name(HOOK_FILE + ".tmp")
+        tmp.write_text(json.dumps({"text": text}, ensure_ascii=False))
+        tmp.replace(path)
+    else:
+        path.unlink(missing_ok=True)
     return _with_output(request, _requeue(request, clip_id))
 
 

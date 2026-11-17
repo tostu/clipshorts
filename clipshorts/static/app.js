@@ -81,12 +81,13 @@ function buildCard(id) {
     title: "Run layout, captions and render (uses CPU)", onclick: () => processClip(id) });
   const actions = el("div", { class: "actions" }, process, layoutLabel, download, retry, del);
   const captions = buildCaptions(id, error);
+  const hook = buildHook(id, error);
   const post = buildPost(id, error);
-  const body = el("div", {}, title, meta, badges, stages, bar, error, actions, captions.root,
-    post.root);
+  const body = el("div", {}, title, meta, badges, stages, bar, error, actions, hook.root,
+    captions.root, post.root);
   const root = el("article", { class: "card clip" }, preview, body);
   return { root, video, placeholder, preview, title, meta, badges, stages, bar, error, select,
-    layoutLabel, process, download, retry, del, captions, post, videoSrc: "" };
+    layoutLabel, process, download, retry, del, captions, hook, post, videoSrc: "" };
 }
 
 // -- caption text: edit words by hand, then re-render ----------------------------------------
@@ -138,6 +139,27 @@ function buildCaptions(id, errorEl) {
     try { show(await api(`/api/clips/${id}/captions`)); } catch (e) { fail(e); }
   });
   return { root, save, reset };
+}
+
+// -- hook: attention line on the first seconds of the video ------------------------------------
+function buildHook(id, errorEl) {
+  const text = el("input", { type: "text", maxLength: 100, class: "hook-input",
+    placeholder: "e.g. Wait for the end..." });
+  const note = el("p", { class: "muted",
+    textContent: "Shown for the first 3 s in the upper third, clear of TikTok's UI. Empty removes it." });
+  const save = el("button", { textContent: "Save and re-render", onclick: async () => {
+    errorEl.hidden = true;
+    try {
+      upsert(await api(`/api/clips/${id}/hook`, { method: "PUT", body: { text: text.value } }));
+    } catch (e) { errorEl.hidden = false; errorEl.textContent = String(e.message || e); }
+  } });
+  const root = el("details", { class: "post" }, el("summary", {}, "Hook text"), text, note,
+    el("div", { class: "actions" }, save));
+  // follow the server value, but never overwrite what is being typed
+  const sync = (c) => {
+    if (c.hook != null && document.activeElement !== text) text.value = c.hook;
+  };
+  return { root, save, sync };
 }
 
 // -- post: metadata, export, publications (phase 4) -------------------------------------
@@ -324,6 +346,9 @@ function updateCard(c) {
   card.captions.root.hidden = c.status !== "done";
   card.captions.save.disabled = active;
   card.captions.reset.disabled = active;
+  card.hook.root.hidden = c.status !== "done";
+  card.hook.save.disabled = active;
+  card.hook.sync(c);
 
   // video: swap src only when the file changed (updated_at moves on every re-render).
   // Unprocessed clips show the raw download.

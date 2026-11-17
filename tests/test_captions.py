@@ -203,3 +203,34 @@ def test_expand_edited_deletes_and_splits():
     assert [w["text"] for w in out] == ["Hallo", "zwei", "Worte"]
     assert out[1] == {"start": 2.0, "end": 3.0, "text": "zwei"}
     assert out[2] == {"start": 3.0, "end": 4.0, "text": "Worte"}
+
+
+# -- hook ----------------------------------------------------------------------------------
+def test_hook_event_is_top_aligned_box_for_first_seconds():
+    from clipshorts.captions import build_ass, hook_event
+
+    ev = hook_event("Das  musst du\nsehen", STYLE)
+    assert ev is not None and ev.startswith("Dialogue: 1,0:00:00.00,0:00:03.00,Hook,")
+    ass = build_ass([], STYLE, "Das musst du sehen")
+    assert "Style: Hook," in ass and ",3,16,0,8," in ass  # BorderStyle 3 box, alignment 8 (top)
+    assert hook_event("   ", STYLE) is None
+    assert "Dialogue:" not in build_ass([], STYLE, "")
+
+
+def test_hook_wraps_and_stays_in_frame():
+    from clipshorts.captions import wrap_hook
+
+    text = "Warte bis du siehst was dann passiert ist, das glaubt dir keiner"
+    lines, size = wrap_hook(text, STYLE)
+    assert 1 < len(lines) <= STYLE.hook_max_lines
+    assert size <= STYLE.hook_font_size
+    for ln in lines:
+        assert text_width(ln, size) <= STYLE.max_width - 2 * STYLE.hook_pad
+    assert " ".join(lines) == text
+
+
+def test_hook_clear_of_tiktok_ui_zones():
+    # hook sits above the caption baseline and its right edge clears the button column
+    assert STYLE.hook_top + STYLE.hook_max_lines * STYLE.hook_font_size * 1.6 < \
+        STYLE.play_h * STYLE.bottom_frac - STYLE.font_size
+    assert STYLE.margin_r >= 140 and STYLE.hook_top >= 250
