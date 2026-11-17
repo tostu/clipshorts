@@ -77,7 +77,18 @@
     <div id="channels"></div>
   </details>
 
+  <div id="filters" class="row">
+    <label>Day
+      <input id="filter-day" type="date">
+    </label>
+    <label>Creator
+      <select id="filter-creator"><option value="">all</option></select>
+    </label>
+    <button type="button" id="filter-clear" hidden>Clear filters</button>
+  </div>
+
   <p id="empty" class="muted" hidden>No clips yet.</p>
+  <p id="no-match" class="muted" hidden>No clips match the filters.</p>
   <section id="clips"></section>
   </div>
 

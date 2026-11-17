@@ -36,6 +36,34 @@ def test_create_clip_queues_job(client):
     assert len(jobs) == 1 and jobs[0].ref_id == body["id"]
 
 
+def test_create_enqueues_fetch_only(client):
+    client.post("/api/clips", json={"url": URL})
+    assert [j.kind for j in client.app.state.db.list_jobs("queued")] == ["fetch"]
+
+
+def test_process_requires_fetched_and_enqueues_pipeline(client):
+    cid = client.post("/api/clips", json={"url": URL}).json()["id"]
+    assert client.post(f"/api/clips/{cid}/process").status_code == 409  # still queued
+    assert client.post("/api/clips/99/process").status_code == 404
+    db = client.app.state.db
+    db.update_clip(cid, status="fetched")
+    r = client.post(f"/api/clips/{cid}/process", json={"layout": "face"})
+    assert r.status_code == 200 and r.json()["status"] == "queued"
+    assert r.json()["layout_override"] == "face"
+    assert [j.kind for j in db.list_jobs("queued")] == ["fetch", "pipeline"]
+
+
+def test_raw_serves_source_when_downloaded(client, cfg):
+    cid = client.post("/api/clips", json={"url": URL}).json()["id"]
+    assert client.get(f"/api/clips/{cid}/raw").status_code == 404
+    assert client.get(f"/api/clips/{cid}").json()["raw_url"] is None
+    d = cfg.clip_dir(cid)
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "source.mp4").write_bytes(b"raw" * 10)
+    assert client.get(f"/api/clips/{cid}/raw").content == b"raw" * 10
+    assert client.get(f"/api/clips/{cid}").json()["raw_url"] == f"/api/clips/{cid}/raw"
+
+
 def test_create_layout_auto_means_no_override(client):
     r = client.post("/api/clips", json={"url": URL})
     assert r.json()["layout_override"] is None and r.json()["language"] == "auto"
@@ -151,21 +179,28 @@ def test_rerender_validation(client, cfg):
 
 
 def test_rerender_end_to_end_with_worker(tmp_path, fake_tools):
-    """A done clip re-rendered with a new layout re-runs layout + render only."""
+    """New clips stop after fetch; /process runs the rest; a re-render re-runs layout + render."""
     import time
 
     cfg2 = Config(data_dir=tmp_path / "d", worker_enabled=True, nice_level=0, _env_file=None)
     with TestClient(create_app(cfg2, fake_tools.as_tools())) as c:
         cid = c.post("/api/clips", json={"url": URL}).json()["id"]
 
-        def wait_done():
+        def wait_done(states=("done", "failed")):
             for _ in range(200):
                 body = c.get(f"/api/clips/{cid}").json()
-                if body["status"] in ("done", "failed"):
+                if body["status"] in states:
                     return body
                 time.sleep(0.05)
             raise AssertionError("worker did not finish")
 
+        fetched = wait_done(("fetched", "failed"))
+        assert fetched["status"] == "fetched" and fetched["output_url"] is None
+        assert fetched["raw_url"] == f"/api/clips/{cid}/raw"
+        assert c.get(fetched["raw_url"]).status_code == 200
+        assert fake_tools.transcriptions == [] and fake_tools.renders == []
+        assert c.post(f"/api/clips/{cid}/process").status_code == 200
+        assert c.post(f"/api/clips/{cid}/process").status_code == 409  # already queued
         first = wait_done()
         assert first["status"] == "done" and first["output_url"]
         assert c.get(first["output_url"]).content == b"fake-output"
@@ -234,7 +269,9 @@ def test_captions_edit_end_to_end_reruns_captions_and_render_only(tmp_path, fake
         def wait_done():
             for _ in range(200):
                 body = c.get(f"/api/clips/{cid}").json()
-                if body["status"] in ("done", "failed"):
+                if body["status"] == "fetched":
+                    c.post(f"/api/clips/{cid}/process")
+                elif body["status"] in ("done", "failed"):
                     return body
                 time.sleep(0.05)
             raise AssertionError("worker did not finish")

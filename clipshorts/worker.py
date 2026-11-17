@@ -11,7 +11,7 @@ from .config import Config
 from .db import DB
 from .events import EventBus
 from .media import Tools, apply_nice
-from .pipeline import PipelineResult, run_pipeline
+from .pipeline import FETCH_UNTIL, PipelineResult, run_pipeline
 
 log = logging.getLogger(__name__)
 
@@ -68,15 +68,17 @@ class Worker:
         job = self.db.claim_next_job()
         if job is None:
             return False
-        if job.kind != "pipeline":
+        if job.kind not in ("pipeline", "fetch"):
             self.db.finish_job(job.id, False, f"unknown job kind {job.kind!r}")
             return True
+        # "fetch" = download + probe only (raw preview); "pipeline" = the full run, manual
+        until = FETCH_UNTIL if job.kind == "fetch" else None
         loop = asyncio.get_running_loop()
         try:
             res: PipelineResult = await loop.run_in_executor(
                 self._pool,
                 partial(run_pipeline, job.ref_id, self.cfg, self.db, self.bus, self.tools,
-                        cancel=self._cancel),
+                        cancel=self._cancel, until=until),
             )
         except asyncio.CancelledError:
             raise  # leave job 'running': recovery re-queues it on next start

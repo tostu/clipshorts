@@ -8,6 +8,8 @@ For private use. Respect Twitch's ToS and the streamers' rights when re-uploadin
 
 `download -> probe -> layout -> transcribe -> captions -> render`
 
+New clips (pasted or synced) only run `download` and `probe`: the clip ends as `fetched` with its title, channel, game and duration, and the UI previews the raw download. The remaining stages cost CPU, so they start only when you press **Process** (`POST /api/clips/{id}/process`).
+
 | Stage | What it does |
 |---|---|
 | download | yt-dlp fetches the clip (`source.mp4`) |
@@ -81,7 +83,9 @@ POST   /api/clips                 {url, language?: auto|de|en, layout?: auto|ful
 GET    /api/clips[?status=]       list
 GET    /api/clips/{id}            status, stage, progress, layout, language, error, output url
 DELETE /api/clips/{id}            remove clip + files (409 while queued/running)
+POST   /api/clips/{id}/process    {layout?}  run the full pipeline for a `fetched` clip (409 otherwise)
 POST   /api/clips/{id}/rerender   {layout?}  re-run; cached stages are skipped
+GET    /api/clips/{id}/raw        the downloaded source MP4 (preview before processing)
 GET    /api/clips/{id}/output     MP4, Range supported; ?download=true forces attachment
 GET    /api/events                SSE: clip state changes
 GET    /healthz                   {"ok": true}

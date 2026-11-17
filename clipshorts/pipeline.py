@@ -41,6 +41,8 @@ from .transcribe import WHISPER_SETTINGS, empty_transcript
 log = logging.getLogger(__name__)
 
 STAGE_NAMES = ["download", "probe", "layout", "transcribe", "captions", "render"]
+SOURCE_FILE = "source.mp4"
+FETCH_UNTIL = "probe"  # default job stops here: raw clip + title/channel/game/duration
 STATE_FILE = "stages.json"
 
 
@@ -409,12 +411,18 @@ def run_pipeline(
     tools: Tools,
     stages: list[Stage] | None = None,
     cancel: threading.Event | None = None,
+    until: str | None = None,
 ) -> PipelineResult:
     """Run all stages for a clip, skipping cached ones. Blocking; run in a worker thread.
 
     `cancel` (worker shutdown) interrupts long stages; the result is then `cancelled` and the
-    clip goes back to `queued` so the next start resumes it."""
+    clip goes back to `queued` so the next start resumes it. With `until`, stages after that
+    one are not run and the clip ends as `fetched` (raw download + metadata only); a later
+    full run picks up from the cached stages."""
     stages = STAGES if stages is None else stages
+    if until is not None:
+        names = [s.name for s in stages]
+        stages = stages[: names.index(until) + 1]
     clip = db.get_clip(clip_id)
     if clip is None:
         return PipelineResult("failed", error="clip not found")
@@ -486,7 +494,9 @@ def run_pipeline(
         emit(stage=stage.name, progress=(idx + 1) / total)
 
     result.stage = stages[-1].name if stages else None
-    emit(status="done", stage=result.stage, progress=1.0)
+    if until is not None:
+        result.status = "fetched"
+    emit(status=result.status, stage=result.stage, progress=1.0 if until is None else 0.0)
     return result
 
 

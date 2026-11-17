@@ -34,6 +34,14 @@ def test_index_and_assets_served(client):
     assert "//cdn" not in r.text and "https://" not in client.get("/static/app.js").text
 
 
+def test_filter_controls_shipped(client):
+    html = client.get("/").text
+    for el_id in ("filter-day", "filter-creator", "filter-clear"):
+        assert f'id="{el_id}"' in html
+    js = client.get("/static/app.js").text
+    assert "function applyFilters" in js and "matchesFilters" in js
+
+
 def test_ui_public_but_api_needs_token(tmp_path):
     cfg = Config(data_dir=tmp_path / "d", auth_token="tok", worker_enabled=False,
                  nice_level=0, _env_file=None)
@@ -125,6 +133,8 @@ def test_sse_emits_state_changes(tmp_path, fake_tools):
                     elif line.startswith("data: ") and event == "clip":
                         data = json.loads(line[6:])
                         seen.append(data)
+                        if data.get("status") == "fetched":  # processing is manual
+                            httpx.post(f"{srv.base}/api/clips/{created['id']}/process")
                         if data.get("status") == "done":
                             break
             final = c.get(f"/api/clips/{created['id']}").json()

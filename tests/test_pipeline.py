@@ -29,6 +29,21 @@ def _clip(db):
     return c
 
 
+def test_until_probe_stops_after_metadata_then_full_run_resumes(cfg, db, bus, fake_tools):
+    c = _clip(db)
+    t = fake_tools.as_tools()
+    res = run_pipeline(c.id, cfg, db, bus, t, until="probe")
+    assert res.status == "fetched" and res.ran == ["download", "probe"]
+    row = db.get_clip(c.id)
+    assert row.status == "fetched" and row.title == "Big Play" and row.duration_s == 30.0
+    assert (cfg.clip_dir(c.id) / "source.mp4").exists()
+    assert not (cfg.clip_dir(c.id) / "output.mp4").exists()
+    assert fake_tools.transcriptions == [] and fake_tools.renders == []
+    res = run_pipeline(c.id, cfg, db, bus, t)
+    assert res.status == "done" and res.skipped == ["download", "probe"]
+    assert db.get_clip(c.id).status == "done"
+
+
 def test_m1_stages_run_and_write_artifacts(cfg, db, bus, fake_tools):
     c = _clip(db)
     q = bus.subscribe()

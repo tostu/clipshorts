@@ -77,14 +77,16 @@ function buildCard(id) {
   const retry = el("button", { class: "secondary", textContent: "Retry", hidden: true,
     onclick: () => rerender(id, null) });
   const del = el("button", { class: "danger", textContent: "Delete", onclick: () => remove(id) });
-  const actions = el("div", { class: "actions" }, layoutLabel, download, retry, del);
+  const process = el("button", { textContent: "Process", hidden: true,
+    title: "Run layout, captions and render (uses CPU)", onclick: () => processClip(id) });
+  const actions = el("div", { class: "actions" }, process, layoutLabel, download, retry, del);
   const captions = buildCaptions(id, error);
   const post = buildPost(id, error);
   const body = el("div", {}, title, meta, badges, stages, bar, error, actions, captions.root,
     post.root);
   const root = el("article", { class: "card clip" }, preview, body);
   return { root, video, placeholder, preview, title, meta, badges, stages, bar, error, select,
-    download, retry, del, captions, post, videoSrc: "" };
+    layoutLabel, process, download, retry, del, captions, post, videoSrc: "" };
 }
 
 // -- caption text: edit words by hand, then re-render ----------------------------------------
@@ -279,7 +281,7 @@ function updateCard(c) {
 
   card.badges.replaceChildren();
   const stCls = c.status === "done" ? "ok" : c.status === "failed" ? "bad" : "";
-  card.badges.append(badge(c.status, stCls));
+  card.badges.append(badge(c.status === "fetched" ? "raw, not processed" : c.status, stCls));
   if (c.layout_type) {
     const conf = c.layout_confidence;
     const pct = conf == null ? "" : " " + Math.round(conf * 100) + "%";
@@ -300,6 +302,7 @@ function updateCard(c) {
   [...card.stages.children].forEach((chip, i) => {
     let cls = "stage";
     if (c.status === "done") cls += " done";
+    else if (c.status === "fetched") { if (i < 2) cls += " done"; }
     else if (c.status === "failed" && i === cur) cls += " failed";
     else if (cur >= 0 && i < cur) cls += " done";
     else if (active && i === cur) cls += " active";
@@ -313,6 +316,8 @@ function updateCard(c) {
 
   card.select.value = c.layout_override || "auto";
   card.select.disabled = active;
+  card.layoutLabel.hidden = c.status === "fetched"; // changing layout would start processing
+  card.process.hidden = c.status !== "fetched";
   card.retry.hidden = c.status !== "failed";
   card.del.disabled = active;
   card.post.root.hidden = c.status !== "done";
@@ -320,14 +325,18 @@ function updateCard(c) {
   card.captions.save.disabled = active;
   card.captions.reset.disabled = active;
 
-  // video: swap src only when the file changed (updated_at moves on every re-render)
-  if (c.output_url) {
-    const src = withToken(c.output_url + (c.status === "done" ? "?v=" + encodeURIComponent(c.updated_at) : ""));
+  // video: swap src only when the file changed (updated_at moves on every re-render).
+  // Unprocessed clips show the raw download.
+  const videoUrl = c.output_url || c.raw_url;
+  if (videoUrl) {
+    const src = withToken(videoUrl + (c.status === "done" || c.status === "fetched" ? "?v=" + encodeURIComponent(c.updated_at) : ""));
     if (card.videoSrc !== src && !active) {
       card.videoSrc = src;
       card.video.src = src;
       card.preview.replaceChildren(card.video);
     }
+  }
+  if (c.output_url) {
     card.download.href = withToken(c.output_url + "?download=1");
     card.download.hidden = active;
   } else {
@@ -342,13 +351,55 @@ function removeCard(id) {
   const card = cards.get(id);
   if (card) { card.root.remove(); cards.delete(id); }
   $("empty").hidden = clips.size > 0;
+  applyFilters();
   renderInbox();
+}
+
+// -- filters (day + creator) ---------------------------------------------------------------
+const localDay = (iso) => {
+  const d = new Date(iso);
+  if (isNaN(d)) return "";
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+};
+
+function matchesFilters(c) {
+  const day = $("filter-day").value;
+  const creator = $("filter-creator").value;
+  return (!day || localDay(c.created_at) === day) && (!creator || c.channel === creator);
+}
+
+function refreshCreators() {
+  const sel = $("filter-creator");
+  const keep = sel.value;
+  const names = [...new Set([...clips.values()].map((c) => c.channel).filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b));
+  if (keep && !names.includes(keep)) names.push(keep); // keep a selected creator visible
+  // progress events call this constantly; rebuilding would close an open dropdown
+  if (names.join("\n") === [...sel.options].slice(1).map((o) => o.value).join("\n")) return;
+  sel.replaceChildren(el("option", { value: "", textContent: "all" }),
+    ...names.map((n) => el("option", { value: n, textContent: n })));
+  sel.value = keep;
+}
+
+function applyFilters() {
+  refreshCreators();
+  const active = !!($("filter-day").value || $("filter-creator").value);
+  let shown = 0;
+  for (const [id, card] of cards) {
+    const ok = matchesFilters(clips.get(id));
+    card.root.hidden = !ok;
+    if (ok) shown++;
+  }
+  $("filter-clear").hidden = !active;
+  $("no-match").hidden = !(active && clips.size > 0 && shown === 0);
 }
 
 // -- actions ---------------------------------------------------------------------
 function upsert(clip) {
   clips.set(clip.id, clip);
   updateCard(clip);
+  applyFilters();
   renderInbox();
 }
 
@@ -363,6 +414,17 @@ async function rerender(id, layout) {
     card.error.hidden = false;
     card.error.textContent = String(e.message || e);
     updateCard(clips.get(id));
+  }
+}
+
+async function processClip(id) {
+  const card = cards.get(id);
+  card.error.hidden = true;
+  try {
+    upsert(await api(`/api/clips/${id}/process`, { method: "POST", body: {} }));
+  } catch (e) {
+    card.error.hidden = false;
+    card.error.textContent = String(e.message || e);
   }
 }
 
@@ -621,7 +683,7 @@ async function onClipEvent(ev) {
   const merged = { ...prev, ...data };
   upsert(merged);
   // full row (output_url, detected_language) once a run ends
-  if (data.status && data.status !== prev.status && (data.status === "done" || data.status === "failed")) {
+  if (data.status && data.status !== prev.status && (data.status === "done" || data.status === "failed" || data.status === "fetched")) {
     try { upsert(await api(`/api/clips/${data.id}`)); } catch { /* ignore */ }
   }
 }
@@ -650,6 +712,14 @@ function connect() {
 }
 
 // -- forms ---------------------------------------------------------------------------
+$("filter-day").addEventListener("input", applyFilters);
+$("filter-creator").addEventListener("change", applyFilters);
+$("filter-clear").addEventListener("click", () => {
+  $("filter-day").value = "";
+  $("filter-creator").value = "";
+  applyFilters();
+});
+
 $("token-form").addEventListener("submit", (e) => {
   e.preventDefault();
   setToken($("token").value.trim());

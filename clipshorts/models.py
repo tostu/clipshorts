@@ -4,7 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-Status = Literal["queued", "running", "done", "failed", "waiting"]
+Status = Literal["queued", "running", "fetched", "done", "failed", "waiting"]
 ReviewStatus = Literal["pending", "approved", "rejected"]
 Language = Literal["auto", "de", "en"]
 LayoutChoice = Literal["auto", "fullcam", "stacked", "face", "content"]
@@ -31,6 +31,7 @@ class Clip(BaseModel):
     created_at: str
     updated_at: str
     output_url: str | None = None  # filled by the API when output.mp4 exists
+    raw_url: str | None = None  # filled by the API when the downloaded source.mp4 exists
     detected_language: str | None = None  # filled by the API from transcript.json
 
 

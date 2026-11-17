@@ -69,7 +69,7 @@ def sync_channel(cfg: Config, db: DB, bus: EventBus, tools: Tools, channel_id: i
         except ClipUrlError:
             continue
         clip = db.create_clip(canonical, slug, channel=ch.name, language=ch.language)
-        db.enqueue_job("pipeline", clip.id)
+        db.enqueue_job("fetch", clip.id)  # raw clip + title only; processing is manual
         bus.publish("clip", clip.model_dump())
         res.queued += 1
     db.record_sync(ch.id, None, res.queued)

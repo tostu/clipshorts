@@ -31,6 +31,7 @@ from .models import (
 from .pipeline import (
     CAPTIONS_EDIT_FILE,
     OUTPUT_FILE,
+    SOURCE_FILE,
     TRANSCRIPT_FILE,
     _edit_words,
     _read_json,
@@ -53,6 +54,8 @@ def _output_path(request: Request, clip_id: int):
 def _with_output(request: Request, clip: Clip) -> Clip:
     if _output_path(request, clip.id).is_file():
         clip.output_url = f"/api/clips/{clip.id}/output"
+    if (request.app.state.cfg.clip_dir(clip.id) / SOURCE_FILE).is_file():
+        clip.raw_url = f"/api/clips/{clip.id}/raw"
     try:
         path = request.app.state.cfg.clip_dir(clip.id) / TRANSCRIPT_FILE
         lang = json.loads(path.read_text()).get("language")
@@ -136,13 +139,29 @@ def rerender(request: Request, clip_id: int, body: RerenderBody | None = None) -
     fields: dict = {}
     if body is not None and body.layout is not None:
         fields["layout_override"] = None if body.layout == "auto" else body.layout
+    # a clip that never got past download/probe only needs the cheap fetch again
+    kind = "fetch" if clip.status == "failed" and clip.stage in ("download", "probe") \
+        else "pipeline"
+    return _with_output(request, _requeue(request, clip_id, kind=kind, **fields))
+
+
+@router.post("/clips/{clip_id}/process")
+def process_clip(request: Request, clip_id: int, body: RerenderBody | None = None) -> Clip:
+    """Start the full pipeline (layout, transcribe, captions, render) for a fetched clip.
+    Fetched clips only have the raw download and metadata; this is the manual go-ahead."""
+    clip = _clip_or_404(request, clip_id)
+    if clip.status != "fetched":
+        raise HTTPException(409, f"clip is {clip.status}, not waiting to be processed")
+    fields: dict = {}
+    if body is not None and body.layout is not None:
+        fields["layout_override"] = None if body.layout == "auto" else body.layout
     return _with_output(request, _requeue(request, clip_id, **fields))
 
 
-def _requeue(request: Request, clip_id: int, **fields) -> Clip:
+def _requeue(request: Request, clip_id: int, kind: str = "pipeline", **fields) -> Clip:
     db = _db(request)
     clip = db.update_clip(clip_id, status="queued", error=None, **fields)
-    db.enqueue_job("pipeline", clip_id)
+    db.enqueue_job(kind, clip_id)
     request.app.state.bus.publish("clip", clip.model_dump())
     _poke(request)
     return clip
@@ -248,6 +267,17 @@ def get_output(request: Request, clip_id: int, download: bool = False):
         path, media_type="video/mp4", filename=f"{clip.slug}.mp4",
         content_disposition_type="attachment" if download else "inline",
     )
+
+
+@router.get("/clips/{clip_id}/raw")
+def get_raw(request: Request, clip_id: int):
+    """The downloaded source clip (preview before processing). Supports range requests."""
+    clip = _clip_or_404(request, clip_id)
+    path = request.app.state.cfg.clip_dir(clip_id) / SOURCE_FILE
+    if not path.is_file():
+        raise HTTPException(404, "no download yet")
+    return FileResponse(path, media_type="video/mp4", filename=f"{clip.slug}-raw.mp4",
+                        content_disposition_type="inline")
 
 
 # -- metadata + export (phase 4) ----------------------------------------------------------
@@ -415,7 +445,7 @@ def create_clip(request: Request, body: ClipCreate, response: Response) -> Clip:
                 existing.id, status="queued", error=None, language=body.language,
                 layout_override=override,
             )
-            db.enqueue_job("pipeline", existing.id)
+            db.enqueue_job("fetch", existing.id)
             request.app.state.bus.publish("clip", clip.model_dump())
             _poke(request)
             return clip
@@ -425,7 +455,7 @@ def create_clip(request: Request, body: ClipCreate, response: Response) -> Clip:
         parsed.canonical_url, parsed.slug, channel=parsed.channel,
         language=body.language, layout_override=override,
     )
-    db.enqueue_job("pipeline", clip.id)
+    db.enqueue_job("fetch", clip.id)  # raw download + title only; /process starts the rest
     request.app.state.bus.publish("clip", clip.model_dump())
     _poke(request)
     return clip
