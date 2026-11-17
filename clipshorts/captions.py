@@ -74,11 +74,11 @@ class CaptionStyle:
     hold_s: float = 0.2  # keep the last word visible this long (never into the next caption)
     # hook: attention line shown at the start, in the upper third (clear of TikTok's top bar,
     # right button column and the caption/description area at the bottom)
-    hook_font_size: int = 72
-    hook_min_font_size: int = 44
-    hook_max_lines: int = 3
+    hook_font_size: int = 56
+    hook_min_font_size: int = 40
+    hook_max_lines: int = 2  # compact so the box stays off the main content
     hook_seconds: float = 3.0
-    hook_top: int = 330  # distance of the first line from the top edge, px of 1920
+    hook_top: int = 250  # distance of the first line from the top edge, px of 1920
     hook_box: str = "&H00FFFFFF"  # opaque box behind the text (white)
     hook_text: str = "&H00000000"  # black text on the box
     hook_pad: int = 16  # box padding around the text
@@ -257,7 +257,7 @@ def _header(style: CaptionStyle) -> str:
     )
 
 
-HOOK_MAX_CHARS = 100
+HOOK_MAX_CHARS = 70
 
 
 def clean_hook(text: str | None) -> str:

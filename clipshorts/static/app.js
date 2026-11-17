@@ -166,7 +166,7 @@ function buildCaptions(id, errorEl) {
 
 // -- hook: attention line on the first seconds of the video ------------------------------------
 function buildHook(id, errorEl) {
-  const text = el("input", { type: "text", maxLength: 100, class: "hook-input",
+  const text = el("input", { type: "text", maxLength: 70, class: "hook-input",
     placeholder: "e.g. Wait for the end..." });
   const note = el("p", { class: "muted",
     textContent: "Shown for the first 3 s in the upper third, clear of TikTok's UI. Empty removes it." });
